@@ -3,7 +3,7 @@ const fs = require('fs-extra');
 const PhotoLibrary = require('./PhotoLibrary');
 const { resolveAdminPath, toAdminPath, UPLOADS_DIR } = require('../utils/safePath');
 
-const IMAGE_PATTERN = /\.(jpg|jpeg|png|gif|webp)$/i;
+const IMAGE_PATTERN = /\.(jpg|jpeg|png|gif|webp|avif|jxl|heic)$/i;
 const SNAP_PATTERN = /\.snap\.json$/i;
 
 class LocalPhotoLibrary extends PhotoLibrary {

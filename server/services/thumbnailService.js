@@ -10,7 +10,7 @@ const { jpegCopy, acceptsWebp } = require('../middleware/webpFallback');
 const { currentTenant, DEFAULT_TENANT } = require('../context');
 
 const CACHE_DIR = path.join(CACHE_ROOT, 'thumbs');
-const IMAGE_PATTERN = /\.(jpg|jpeg|png|gif|webp)$/i;
+const IMAGE_PATTERN = /\.(jpg|jpeg|png|gif|webp|avif|jxl|heic)$/i;
 
 // Square cover crop, big enough for a 2x-density grid tile
 const THUMB_SIZE = 480;

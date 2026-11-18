@@ -172,7 +172,7 @@ class FolderController {
               hasSubfolders: subItems.some(subItem => subItem.isDirectory() && !subItem.name.startsWith('.'))
             };
           })());
-        } else if (item.isFile() && /\.(jpg|jpeg|png|gif|webp)$/i.test(item.name)) {
+        } else if (item.isFile() && /\.(jpg|jpeg|png|gif|webp|avif|jxl|heic)$/i.test(item.name)) {
           const relativePath = folderPath ? path.join(folderPath, item.name) : item.name;
           const imageFolder = path.dirname(relativePath);
           
