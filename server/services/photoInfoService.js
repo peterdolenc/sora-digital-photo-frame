@@ -104,7 +104,8 @@ class PhotoInfoService {
       key: `${stat.size}:${Math.round(stat.mtimeMs)}`,
       takenAt: read.takenAt || told.takenAt,
       lat: read.lat ?? told.lat,
-      lon: read.lon ?? told.lon
+      lon: read.lon ?? told.lon,
+      caption: read.caption ?? told.caption
     };
     this.scheduleSave();
   }

@@ -533,6 +533,8 @@ class PhotoFrameSlideshow {
         this.caption = document.getElementById('photoCaption');
         this.captionPlace = document.getElementById('captionPlace');
         this.captionDate = document.getElementById('captionDate');
+        this.captionCaption = document.getElementById('captionCaption');
+        this.captionFile = document.getElementById('captionFile');
         this.noteLayer = document.getElementById('noteLayer');
 
         this.errorState.classList.add('hidden');
@@ -770,17 +772,21 @@ class PhotoFrameSlideshow {
         const info = data?.type === 'image' ? data.info : null;
         const date = formatTakenAt(info?.takenAt);
         const place = info?.place || '';
+        const caption = info?.caption || '';
+        const filename = data?.filename|| '';
         const enabled = localStorage.getItem('photoDetailsEnabled') !== 'false';
 
         this.caption.classList.remove('is-visible');
         clearTimeout(this.captionTimer);
-        if (!enabled || !(date || place)) return;
+        if (!enabled || !(date || place || caption || filename)) return;
 
         // Fade the old words out before the new ones come in
         this.captionTimer = setTimeout(() => {
-            this.captionPlace.textContent = place || date;
-            this.captionDate.textContent = place ? date : '';
-            this.captionDate.hidden = !place || !date;
+            this.captionPlace.textContent = place;
+            this.captionDate.textContent = date;
+            this.captionDate.hidden = false;
+            this.captionCaption.textContent = caption;
+            this.captionFile.textContent = filename;
             this.caption.classList.add('is-visible');
         }, 600);
     }

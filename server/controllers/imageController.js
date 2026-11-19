@@ -157,7 +157,7 @@ class ImageController {
       const relativePath = getLibrary().photoUrl(toAdminPath(randomImage.path));
       // When and where a photo was taken is private: only signed-in viewers get it
       const signedIn = req.session && (req.session.authenticated || req.session.accessAccount);
-      const info = signedIn ? await this.describe(randomImage) : { takenAt: null, place: null };
+      const info = signedIn ? await this.describe(randomImage) : { takenAt: null, place: null, caption: null };
       const fullUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
       // Remote encrypted storage: the frame may fetch the stored bytes and decrypt them itself
       const rawUrl = getLibrary().rawUrl?.(toAdminPath(randomImage.path)) || null;
@@ -231,10 +231,10 @@ class ImageController {
   // When and where the photo was taken, for the frame's caption
   async describe(image) {
     try {
-      const { takenAt, lat, lon } = await photoInfo.get(image.path, image.relativePath);
-      return { takenAt, place: await photoInfo.placeName(lat, lon) };
+      const { takenAt, lat, lon, caption } = await photoInfo.get(image.path, image.relativePath);
+      return { takenAt, place: await photoInfo.placeName(lat, lon), caption: caption || null };
     } catch {
-      return { takenAt: null, place: null };
+      return { takenAt: null, place: null, caption: null };
     }
   }
 

@@ -223,7 +223,7 @@ describe('Robustness', () => {
 
     test('reach a signed-in viewer', async () => {
       const { body } = await admin.get('/api/images/random').expect(200);
-      expect(body.image.info).toEqual({ takenAt: known.takenAt, place: 'Panaji, India' });
+      expect(body.image.info).toEqual({ takenAt: known.takenAt, place: 'Panaji, India', caption: null });
     });
   });
 
