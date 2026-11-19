@@ -21,6 +21,7 @@ class ImageController {
     // Per-tenant state (recently shown, image list cache); see the accessors below
     this.states = new Map();
     this.maxRecentCount = parseInt(process.env.MAX_RECENT_IMAGES) || 10; // Number of recent images to avoid
+    this.shufflePickAmount = Math.max(1, parseInt(process.env.SHUFFLE_PICK_AMOUNT) || 6); // Photos served per random pick
     this.cacheExpiry = parseInt(process.env.IMAGE_CACHE_EXPIRY) || 60000; // Cache for 1 minute
   }
 
@@ -28,13 +29,15 @@ class ImageController {
   state() {
     const { id } = currentTenant();
     if (!this.states.has(id)) {
-      this.states.set(id, { recentlyShown: new Set(), imageCache: null, cacheTimestamp: null });
+      this.states.set(id, { recentlyShown: new Set(), imageCache: null, cacheTimestamp: null, shuffleQueue: { key: null, items: [] } });
     }
     return this.states.get(id);
   }
 
   get recentlyShown() { return this.state().recentlyShown; }
   set recentlyShown(value) { this.state().recentlyShown = value; }
+  get shuffleQueue() { return this.state().shuffleQueue; }
+  set shuffleQueue(value) { this.state().shuffleQueue = value; }
   get imageCache() { return this.state().imageCache; }
   set imageCache(value) { this.state().imageCache = value; }
   get cacheTimestamp() { return this.state().cacheTimestamp; }
@@ -132,7 +135,7 @@ class ImageController {
       const baseDir = folderFilter ? resolveAdminPath(path.join('uploads', decodeURIComponent(folderFilter))) : this.uploadsDir;
       const { order } = baseDir ? await playOrder.read(baseDir) : { order: 'shuffle' };
       const randomImage = order === 'shuffle'
-        ? this.pickShuffled(availableImages)
+        ? await this.pickShuffled(availableImages, baseDir)
         : this.pickNext(await playOrder.sort(baseDir, availableImages, order), req.query.after);
 
       // A snap is drawn by the frame itself, from its page data
@@ -189,18 +192,29 @@ class ImageController {
     }
   }
 
-  // Random, never repeating the last few photos (until the folder runs out)
-  pickShuffled(images) {
-    let pool = images;
-    if (images.length > this.maxRecentCount) {
-      pool = images.filter(img => !this.recentlyShown.has(img.id));
-      if (pool.length === 0) {
-        this.recentlyShown.clear();
-        pool = images;
+  // Shuffle orders the photos by oldest first and then chooses a batch of consequtive images to be shown next.
+  // This way you get to see a few photos from the same event or day before jumping to the next randomly picked point in time.
+  async pickShuffled(images, baseDir) {
+    // A different folder, viewer access or set of photos (deleted, added) starts a new run
+    const key = `${baseDir}\n${images.map(img => img.id).sort().join('\n')}`;
+    if (this.shuffleQueue.key !== key) 
+      this.shuffleQueue = { key, items: [] };
+
+    if (this.shuffleQueue.items.length === 0) {
+      const ordered = await playOrder.sort(baseDir, images, 'oldest');
+      let starts = ordered.map((_, i) => i);
+      if (ordered.length > this.maxRecentCount) {
+        starts = starts.filter(i => !this.recentlyShown.has(ordered[i].id));
+        if (starts.length === 0) {
+          this.recentlyShown.clear();
+          starts = ordered.map((_, i) => i);
+        }
       }
+      const start = starts[Math.floor(Math.random() * starts.length)];
+      this.shuffleQueue.items = ordered.slice(start, start + this.shufflePickAmount);
     }
 
-    const picked = pool[Math.floor(Math.random() * pool.length)];
+    const picked = this.shuffleQueue.items.shift();
     this.recentlyShown.add(picked.id);
     if (this.recentlyShown.size > this.maxRecentCount) {
       this.recentlyShown = new Set(Array.from(this.recentlyShown).slice(-this.maxRecentCount));

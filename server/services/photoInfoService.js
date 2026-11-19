@@ -143,10 +143,11 @@ class PhotoInfoService {
       return {
         takenAt: taken instanceof Date && !isNaN(taken) ? this.localStamp(taken) : null,
         lat: hasGps ? exif.latitude : null,
-        lon: hasGps ? exif.longitude : null
+        lon: hasGps ? exif.longitude : null,
+        caption: exif.description ?? exif.title ?? null
       };
     } catch {
-      return { takenAt: null, lat: null, lon: null };
+      return { takenAt: null, lat: null, lon: null, caption: null };
     }
   }
 
