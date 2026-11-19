@@ -1,100 +1,28 @@
-const bcrypt = require('bcryptjs');
 const { getDataStore } = require('../store');
 const { passClientError } = require('../utils/httpError');
-const { rotateSession } = require('../utils/session');
-const { currentTenant } = require('../context');
-const pairing = require('../services/pairingService');
-const familyCodes = require('../services/familyCodeService');
-const AttemptLimiter = require('../utils/attemptLimiter');
 
-// bcrypt cost for PINs: each sign-in compares against every account's hash, so keep it modest
-const PIN_ROUNDS = 10;
-
+/**
+ * Accounts: a name and the folders it may show. The server plays one account
+ * at a time (see services/frameService); an account with no folders shows everything.
+ */
 class AccessAccountController {
-    constructor() {
-        // Rate limiting for PIN attempts
-        this.pinSignIn = true; // createApp({ pinSignIn: false }) turns it off
-        this.familyCode = false; // createApp({ familyCode: true }): PIN sign-in also needs the family code (hosted)
-        // 5 wrong tries in 5 minutes locks for 15 minutes, then 30, 60... up to a day
-        this.limiter = new AttemptLimiter({ keep: key => key.startsWith('family:') });
-    }
-
     async loadAccounts() {
         const accounts = await getDataStore().get('access-accounts', []);
-        // Accounts saved before PINs were hashed are hashed the first time they're read
-        return accounts.some(account => account.pin !== undefined) ? await this.hashStoredPins() : accounts;
-    }
-
-    hashStoredPins() {
-        return getDataStore().update('access-accounts', [], accounts => Promise.all(accounts.map(async (account) => {
-            if (account.pin === undefined) return account;
-            const { pin, ...rest } = account;
-            return { ...rest, pinHash: await this.hashPin(pin) };
-        })));
-    }
-
-    hashPin(pin) {
-        return bcrypt.hash(String(pin), PIN_ROUNDS);
-    }
-
-    async pinMatches(account, pin) {
-        if (account.pinHash) return bcrypt.compare(String(pin), account.pinHash);
-        return account.pin !== undefined && String(account.pin) === String(pin);
-    }
-
-    // The account with this PIN, if any (optionally ignoring one account)
-    async findByPin(accounts, pin, exceptId = null) {
-        for (const account of accounts) {
-            if (account.id !== exceptId && await this.pinMatches(account, pin)) return account;
-        }
-        return null;
-    }
-
-    // What the admin page gets: never the PIN or its hash
-    publicAccount({ pin, pinHash, ...account }) {
-        return { ...account, hasPin: Boolean(pin || pinHash) };
+        // Accounts saved when they had PINs: the PIN and its bookkeeping are dropped
+        return accounts.map(({ pin, pinHash, lastAccessed, ...account }) => account);
     }
 
     async saveAccounts(accounts) {
         await getDataStore().set('access-accounts', accounts);
     }
 
-    // Rate limiting (see utils/attemptLimiter). A key is an address, or a whole
-    // family ("family:<tenant>"), so spreading guesses over many addresses doesn't help.
-    checkRateLimit(key) { return this.limiter.check(key); }
-    recordFailedAttempt(key) { this.limiter.fail(key); }
-    forgetAttempt(key) { this.limiter.forget(key); }
-    recordSuccessfulAttempt(key) { this.limiter.clear(key); }
-
     generateAccountId() {
         return 'acc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     }
 
-    // A new account with a PIN nobody has yet (used when a frame is paired by QR code)
-    async addAccountWithRandomPin({ name, assignedFolders = [] }) {
-        let account;
-        await getDataStore().update('access-accounts', [], async accounts => {
-            let pin;
-            do {
-                pin = String(require('crypto').randomInt(100000, 1000000));
-            } while (await this.findByPin(accounts, pin));
-            account = {
-                id: this.generateAccountId(),
-                name,
-                pinHash: await this.hashPin(pin),
-                assignedFolders,
-                createdAt: new Date().toISOString(),
-                lastAccessed: null
-            };
-            return [...accounts, account];
-        });
-        return account;
-    }
-
     async getAllAccounts(req, res) {
         try {
-            const accounts = await this.loadAccounts();
-            res.json({ accounts: accounts.map(account => this.publicAccount(account)) });
+            res.json({ accounts: await this.loadAccounts() });
         } catch (error) {
             if (passClientError(res, error)) return;
             console.error('Error fetching accounts:', error);
@@ -107,44 +35,24 @@ class AccessAccountController {
 
     async createAccount(req, res) {
         try {
-            const { name, pin, assignedFolders = [] } = req.body;
+            const { name, assignedFolders = [] } = req.body;
 
-            if (!name || !pin) {
+            if (!name) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Name and PIN are required'
+                    error: 'Name is required'
                 });
             }
 
-            let duplicate = false;
-            let newAccount;
-            const pinHash = await this.hashPin(pin);
-            await this.loadAccounts(); // hash any PINs still stored as-is first
-            await getDataStore().update('access-accounts', [], async accounts => {
-                duplicate = Boolean(await this.findByPin(accounts, pin));
-                if (duplicate) return accounts;
-                newAccount = {
-                    id: this.generateAccountId(),
-                    name,
-                    pinHash,
-                    assignedFolders,
-                    createdAt: new Date().toISOString(),
-                    lastAccessed: null
-                };
-                return [...accounts, newAccount];
-            });
-            if (duplicate) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'PIN already exists',
-                    code: 'DUPLICATE_PIN'
-                });
-            }
+            const account = {
+                id: this.generateAccountId(),
+                name,
+                assignedFolders,
+                createdAt: new Date().toISOString()
+            };
+            await getDataStore().update('access-accounts', [], accounts => [...accounts, account]);
 
-            res.status(201).json({
-                success: true,
-                account: this.publicAccount(newAccount)
-            });
+            res.status(201).json({ success: true, account });
         } catch (error) {
             if (passClientError(res, error)) return;
             console.error('Error creating account:', error);
@@ -158,9 +66,8 @@ class AccessAccountController {
     async updateAccount(req, res) {
         try {
             const { id } = req.params;
-            const { name, pin, assignedFolders = [] } = req.body;
+            const { name, assignedFolders = [] } = req.body;
 
-            // PINs can't be shown, so a blank PIN keeps the current one
             if (!name) {
                 return res.status(400).json({
                     success: false,
@@ -168,23 +75,13 @@ class AccessAccountController {
                 });
             }
 
-            let notFound = false;
-            let duplicate = false;
             let updatedAccount;
-            const pinHash = pin ? await this.hashPin(pin) : null;
-            await this.loadAccounts();
-            await getDataStore().update('access-accounts', [], async accounts => {
-                const accountIndex = accounts.findIndex(account => account.id === id);
-                if (accountIndex === -1) { notFound = true; return accounts; }
-                duplicate = Boolean(pin && await this.findByPin(accounts, pin, id));
-                if (duplicate) return accounts;
-                updatedAccount = { ...accounts[accountIndex], name, assignedFolders };
-                if (pinHash) { delete updatedAccount.pin; updatedAccount.pinHash = pinHash; }
-                const next = [...accounts];
-                next[accountIndex] = updatedAccount;
-                return next;
-            });
-            if (notFound) {
+            await getDataStore().update('access-accounts', [], accounts => accounts.map(({ pin, pinHash, lastAccessed, ...account }) => {
+                if (account.id !== id) return account;
+                updatedAccount = { ...account, name, assignedFolders };
+                return updatedAccount;
+            }));
+            if (!updatedAccount) {
                 return res.status(404).json({
                     success: false,
                     error: 'Account not found',
@@ -192,18 +89,7 @@ class AccessAccountController {
                 });
             }
 
-            if (duplicate) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'PIN already exists',
-                    code: 'DUPLICATE_PIN'
-                });
-            }
-
-            res.json({
-                success: true,
-                account: this.publicAccount(updatedAccount)
-            });
+            res.json({ success: true, account: updatedAccount });
         } catch (error) {
             if (passClientError(res, error)) return;
             console.error('Error updating account:', error);
@@ -225,8 +111,6 @@ class AccessAccountController {
                 });
             }
 
-            // Frames paired to this account stop working with it
-            await require('../services/pairingService').removeDevices(device => device.accountId === id);
             await getDataStore().update('access-accounts', [], accounts => accounts.filter(account => account.id !== id));
 
             res.json({
@@ -239,229 +123,6 @@ class AccessAccountController {
             res.status(500).json({
                 success: false,
                 error: 'Failed to delete account'
-            });
-        }
-    }
-
-    // The accounts a PIN may match. Hosted, only with this family's code: a
-    // wrong code finds no family at all, and so no accounts.
-    async accountsForSignIn(familyCode) {
-        try {
-            if (this.familyCode && !(await familyCodes.matches(familyCode))) return [];
-            return await this.loadAccounts();
-        } catch (error) {
-            if (error.status >= 400 && error.status < 500) return []; // no family to look in
-            throw error;
-        }
-    }
-
-    // The screen for this sign-in: the one this browser already is (by its
-    // token, or by its session for a page from before PIN screens that renews
-    // with the PIN), or a new one
-    async screenFor(account, token, sessionDeviceId) {
-        const existing = token ? await pairing.signIn(token) : null;
-        if (existing && existing.accountId === account.id) return { device: existing, token };
-        if (sessionDeviceId) {
-            const current = (await pairing.listDevices()).find(d => d.id === sessionDeviceId && d.accountId === account.id);
-            if (current) return { device: current, token: undefined };
-        }
-        return pairing.addDevice({ name: account.name, accountId: account.id, via: 'pin' });
-    }
-
-    // Admin: the family code frames give with their PIN (hosted only)
-    async getFamilyCode(req, res) {
-        try {
-            if (!this.familyCode) return res.json({ success: true, required: false });
-            res.json({ success: true, required: true, code: await familyCodes.get() });
-        } catch (error) {
-            if (passClientError(res, error)) return;
-            console.error('Error reading the family code:', error);
-            res.status(500).json({ success: false, error: 'Could not load the family code' });
-        }
-    }
-
-    async renewFamilyCode(req, res) {
-        try {
-            if (!this.familyCode) return res.status(404).json({ success: false, error: 'Family codes are not used here' });
-            res.json({ success: true, required: true, code: await familyCodes.renew() });
-        } catch (error) {
-            if (passClientError(res, error)) return;
-            console.error('Error renewing the family code:', error);
-            res.status(500).json({ success: false, error: 'Could not make a new family code' });
-        }
-    }
-
-    async authenticateWithPin(req, res) {
-        if (!this.pinSignIn) {
-            return res.status(404).json({ success: false, error: 'PIN sign-in is turned off', code: 'PIN_DISABLED' });
-        }
-        try {
-            const { pin, token, familyCode } = req.body;
-            const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-
-            // Check rate limiting
-            const rateLimitCheck = this.checkRateLimit(clientIP);
-            if (!rateLimitCheck.allowed) {
-                console.log(`🚫 Rate limit exceeded for IP: ${clientIP}`);
-                return res.status(429).json({
-                    success: false,
-                    error: rateLimitCheck.message,
-                    code: 'RATE_LIMITED',
-                    remainingTime: rateLimitCheck.remainingTime
-                });
-            }
-
-            if (!pin) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'PIN is required'
-                });
-            }
-
-            // Wrong tries also count against the family, so spreading them over many
-            // addresses (or faking X-Forwarded-For) doesn't help
-            const familyKey = `family:${currentTenant().id}`;
-            const familyCheck = this.checkRateLimit(familyKey);
-            if (!familyCheck.allowed) {
-                return res.status(429).json({
-                    success: false,
-                    error: familyCheck.message,
-                    code: 'RATE_LIMITED',
-                    remainingTime: familyCheck.remainingTime
-                });
-            }
-
-            // Count the try before checking it (see recordFailedAttempt)
-            this.recordFailedAttempt(clientIP);
-            this.recordFailedAttempt(familyKey);
-
-            const accounts = await this.accountsForSignIn(familyCode);
-            const account = await this.findByPin(accounts, pin);
-
-            if (!account) {
-                // No frames to guess at (e.g. a wrong family code): not the family's try
-                if (!accounts.length) this.forgetAttempt(familyKey);
-                const newRateLimitCheck = this.checkRateLimit(clientIP);
-
-                console.log(`❌ Failed PIN attempt from IP: ${clientIP}, attempts remaining: ${newRateLimitCheck.attemptsRemaining || 0}`);
-
-                return res.status(401).json({
-                    success: false,
-                    error: 'Invalid PIN',
-                    code: 'INVALID_PIN',
-                    attemptsRemaining: newRateLimitCheck.attemptsRemaining || 0
-                });
-            }
-
-            // A PIN sign-in makes this browser a screen, as pairing by QR code does,
-            // so it counts toward the same limit. A browser that already is one of
-            // this account's screens (it sends its token) stays that screen.
-            const screen = await this.screenFor(account, token, req.session.deviceId);
-
-            // Record successful attempt (clears rate limiting)
-            this.recordSuccessfulAttempt(clientIP);
-            this.recordSuccessfulAttempt(familyKey);
-            console.log(`✅ Successful PIN authentication from IP: ${clientIP} for account: ${account.name}`);
-
-            // Update last accessed time
-            await getDataStore().update('access-accounts', [], current => current.map(item =>
-                item.id === account.id ? { ...item, lastAccessed: new Date().toISOString() } : item));
-
-            // Store account info in a new session, so an id planted before sign-in is worthless
-            await rotateSession(req);
-            req.session.accessAccount = {
-                id: account.id,
-                name: account.name,
-                assignedFolders: account.assignedFolders
-            };
-            req.session.deviceId = screen.device.id;
-            req.session.tenantId = currentTenant().id;
-
-            res.json({
-                success: true,
-                token: screen.token,
-                device: { id: screen.device.id, name: screen.device.name, language: screen.device.language || null },
-                account: {
-                    id: account.id,
-                    name: account.name,
-                    assignedFolders: account.assignedFolders
-                }
-            });
-        } catch (error) {
-            if (passClientError(res, error)) return;
-            console.error('Error authenticating with PIN:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Authentication failed'
-            });
-        }
-    }
-
-    async getSession(req, res) {
-        try {
-            if (req.session.accessAccount) {
-                res.json({
-                    authenticated: true,
-                    account: req.session.accessAccount,
-                    pinSignIn: this.pinSignIn,
-                    familyCode: this.familyCode
-                });
-            } else {
-                res.json({
-                    authenticated: false,
-                    pinSignIn: this.pinSignIn,
-                    familyCode: this.familyCode
-                });
-            }
-        } catch (error) {
-            if (passClientError(res, error)) return;
-            console.error('Error checking session:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to check session'
-            });
-        }
-    }
-
-    async clearSession(req, res) {
-        try {
-            // A screen that signs out frees its place, so it no longer counts toward the limit
-            if (req.session.deviceId) {
-                const deviceId = req.session.deviceId;
-                // Signing out still works if this fails; an admin can remove the screen in Access
-                await pairing.removeDevices(device => device.id === deviceId)
-                    .catch(error => console.error('Could not free the screen on sign-out:', error.message));
-            }
-
-            // A frame signing out in the admin's browser keeps the admin signed in
-            if (req.session.authenticated) {
-                delete req.session.accessAccount;
-                delete req.session.deviceId;
-                delete req.session.tenantId;
-                return res.json({ success: true, message: 'Session cleared' });
-            }
-
-            req.session.destroy((err) => {
-                if (err) {
-                    console.error('Error destroying session:', err);
-                    return res.status(500).json({
-                        success: false,
-                        error: 'Failed to clear session'
-                    });
-                }
-                
-                res.clearCookie('photoframe.sid'); // Custom session cookie name
-                res.json({
-                    success: true,
-                    message: 'Session cleared'
-                });
-            });
-        } catch (error) {
-            if (passClientError(res, error)) return;
-            console.error('Error clearing session:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to clear session'
             });
         }
     }

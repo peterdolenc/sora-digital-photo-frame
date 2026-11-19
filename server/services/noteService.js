@@ -96,7 +96,7 @@ class NoteService {
 
   /**
    * Notes a frame should show right now: inside their window, meant for this
-   * frame, and with photos limited to the folders its PIN may see.
+   * frame, and with photos limited to the folders its account may see.
    */
   async active(session = {}, now = new Date()) {
     const notes = (await this.load()).filter(note =>
@@ -247,7 +247,7 @@ class NoteService {
   }
 
   /**
-   * The photos a frame may show: the ones that still exist and, for a PIN
+   * The photos a frame may show: the ones that still exist and, for an account
    * limited to some folders, sit inside them.
    */
   async visiblePhotos(photos = [], session = {}) {

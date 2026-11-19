@@ -282,7 +282,7 @@ class SettingsManager {
 
     updateAllSettings() {
         // Weather widget
-        const weatherEnabled = localStorage.getItem('weatherWidgetEnabled') !== 'false';
+        const weatherEnabled = localStorage.getItem('weatherWidgetEnabled') === 'true';
         document.getElementById('weatherWidgetToggle').checked = weatherEnabled;
 
         // Date display

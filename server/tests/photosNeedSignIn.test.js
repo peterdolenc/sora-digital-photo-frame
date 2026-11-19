@@ -29,7 +29,7 @@ const PHOTO_ROUTES = [
   '/uploads/family/beach.png'
 ];
 
-describe('Photos, thumbnails, folders and notes need a signed-in viewer (issue #30)', () => {
+describe('Photos, thumbnails, folders and notes are open to the local network', () => {
   const app = createApp();
 
   beforeAll(async () => {
@@ -42,11 +42,10 @@ describe('Photos, thumbnails, folders and notes need a signed-in viewer (issue #
     await Promise.all([testUploadsDir, testCacheDir, testDataDir].map(dir => fs.remove(dir)));
   });
 
-  test('someone who has not signed in gets none of them', async () => {
+  test('the frame gets all of them without signing in', async () => {
     for (const url of PHOTO_ROUTES) {
       const res = await request(app).get(url);
-      expect({ url, status: res.status }).toEqual({ url, status: 401 });
-      expect(res.body.code).toBe('AUTH_REQUIRED');
+      expect({ url, status: res.status }).toEqual({ url, status: 200 });
     }
   });
 
@@ -59,40 +58,7 @@ describe('Photos, thumbnails, folders and notes need a signed-in viewer (issue #
     }
   });
 
-  test('a frame signed in with a PIN still shows photos', async () => {
-    const admin = request.agent(app);
-    await admin.post('/api/auth/login').send({ password: 'test-admin-pass' }).expect(200);
-    await admin.post('/api/access-accounts').send({ name: 'Kitchen', pin: '736251' }).expect(201);
-
-    const frame = request.agent(app);
-    await frame.post('/api/auth/pin').send({ pin: '736251' }).expect(200);
-    const { body } = await frame.get('/api/images/random').expect(200);
-    expect(body.image.url).toMatch(/\/uploads\/family\/beach\.png$/);
-    await frame.get(new URL(body.image.url).pathname).expect(200);
-    await frame.get('/api/notes/active').expect(200);
-
-    // Signing out locks the frame again
-    await frame.delete('/api/auth/session').expect(200);
-    await frame.get('/api/images/random').expect(401);
-  });
-
   test('the health check stays open', async () => {
     await request(app).get('/api/health').expect(200);
-  });
-});
-
-describe('PUBLIC_PHOTOS keeps the old open behaviour for setups that rely on it', () => {
-  test('with publicPhotos on, photos load without signing in', async () => {
-    const open = createApp({ publicPhotos: true });
-    await fs.ensureDir(path.join(testUploadsDir, 'family'));
-    const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#3c3' } }).png().toBuffer();
-    await fs.writeFile(path.join(testUploadsDir, 'family', 'garden.png'), png);
-    try {
-      await request(open).get('/api/images/random').expect(200);
-      await request(open).get('/uploads/family/garden.png').expect(200);
-    } finally {
-      createApp(); // back to the default for anything that runs after
-      await Promise.all([testUploadsDir, testCacheDir, testDataDir].map(dir => fs.remove(dir)));
-    }
   });
 });

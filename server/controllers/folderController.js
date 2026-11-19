@@ -7,7 +7,7 @@ const playOrder = require('../services/playOrderService');
 const imageController = require('./imageController');
 const { resolveAdminPath, toAdminPath } = require('../utils/safePath');
 const { passClientError } = require('../utils/httpError');
-const { canSee, canOpen, foldersBelow } = require('../utils/viewerAccess');
+const { canSee, canOpen, foldersBelow, assignedFolders } = require('../utils/viewerAccess');
 
 class FolderController {
   constructor() {
@@ -122,13 +122,9 @@ class FolderController {
       let folders = [];
       let images = [];
       
-      // Check if user has access restrictions (PIN authenticated users, not admin)
-      const hasAccessRestrictions = req.session && req.session.accessAccount && req.session.accessAccount.assignedFolders && req.session.accessAccount.assignedFolders.length > 0 && !req.session.authenticated;
-      let allowedFolders = null;
-      
-      if (hasAccessRestrictions) {
-        allowedFolders = req.session.accessAccount.assignedFolders;
-      }
+      // The account being played may be limited to some folders (not the admin)
+      const allowedFolders = assignedFolders(req);
+      const hasAccessRestrictions = Boolean(allowedFolders);
 
       // Folder details (counts, covers) are gathered in parallel after filtering
       const folderJobs = [];

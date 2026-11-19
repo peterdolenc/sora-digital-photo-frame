@@ -41,11 +41,6 @@ describe('Request logging keeps secrets out of the logs', () => {
     expect(logs).not.toMatch(/wrong-guess-123/);
   });
 
-  test('PIN in a JSON body is never logged', async () => {
-    await request(app).post('/api/auth/pin').send({ pin: '864213' });
-    expect(output.join('\n')).not.toMatch(/864213/);
-  });
-
   test('session ids are neither logged nor returned', async () => {
     const agent = request.agent(app);
     const res = await agent.post('/api/auth/login').send({ password: 'correct-horse-battery' }).expect(200);

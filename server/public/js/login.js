@@ -58,7 +58,7 @@ class LoginManager {
 
             if (response.ok) {
                 this.showSuccess(t('login.success'), 'login.success');
-                // Back to the page that asked for sign-in (e.g. pairing a frame), else the library
+                // Back to the page that asked for sign-in else the library
                 const next = new URLSearchParams(window.location.search).get('next');
                 const target = next && /^\/(?![\/\\])/.test(next) ? next : '/admin';
                 setTimeout(() => {

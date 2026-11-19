@@ -41,7 +41,10 @@ Prefer Docker? `ADMIN_PASSWORD=yourpassword docker compose up -d` — see [DOCKE
 
 **🖼 The frame**
 - Full-screen slideshow with soft cross-fades and a large clock, date and weather widget.
+- Starts straight away, with no sign-in: the server decides which account (set of folders) is playing.
 - Pick what plays: everything, or a single folder (nested folders included).
+- Shuffle plays a short run of photos in date order (oldest first) from a random spot, then jumps to another spot. `SHUFFLE_PICK_AMOUNT` sets the run length.
+- Under the photo it shows the date, place, the photo's own caption (EXIF description or XMP title) and a cleaned-up file name. The info overlay (`I`) shows camera, lens, aperture and ISO.
 - Keeps the screen awake, including on iPads and phones.
 - Install it to the home screen like an app.
 
@@ -55,13 +58,12 @@ Prefer Docker? `ADMIN_PASSWORD=yourpassword docker compose up -d` — see [DOCKE
 **💌 Notes**
 - Slip a note into the slideshow: "Ambika is visiting you", with up to four photos.
 - It shows every few minutes between two dates, with an optional countdown to the event.
-- Pick a memory-book layout, a theme, and which frames or PINs see it.
+- Pick a memory-book layout, a theme, and which accounts see it.
 
-**🔑 Sharing**
-- Give each frame or family member their own PIN.
-- Limit each PIN to the folders it may show.
-- Pair a frame by scanning the QR code on its screen with your phone. It stays signed in, and you can unpair it from Access.
-- Frames with no keyboard can sign in from the address: `http://<server>:3000/slideshow?pin=123456`.
+**🔑 Accounts and control**
+- An account is a named set of folders it may show. The server plays one account at a time, and remembers the last one across restarts (the first account on a fresh install).
+- Other services, such as Home Assistant, switch the account, skip to the next photo or show the info overlay through a small HTTP API (see [Controlling the frame](#controlling-the-frame)).
+- The slideshow, its photos and the control API are open to anyone who can reach the server: run it on a trusted local network only. The library (`/admin`) still needs the admin password.
 
 ## A closer look
 
@@ -72,7 +74,7 @@ Prefer Docker? `ADMIN_PASSWORD=yourpassword docker compose up -d` — see [DOCKE
   </tr>
   <tr>
     <td width="50%"><img src=".github/readme/folders.jpg" alt="Choosing what the slideshow plays"><br><sub><b>Now playing</b> — choose a folder for the frame</sub></td>
-    <td width="50%"><img src=".github/readme/access.jpg" alt="Access accounts with PINs"><br><sub><b>Access</b> — a PIN per frame or person</sub></td>
+    <td width="50%"><img src=".github/readme/access.jpg" alt="Access accounts"><br><sub><b>Access</b> — accounts with their own folders</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src=".github/readme/slideshow.jpg" alt="Slideshow controls"><br><sub><b>Slideshow</b> — controls appear on hover</sub></td>
@@ -88,6 +90,33 @@ Prefer Docker? `ADMIN_PASSWORD=yourpassword docker compose up -d` — see [DOCKE
 
 <img src=".github/readme/mobile.jpg" alt="Sora on a phone: library, folder and slideshow" width="100%">
 
+## Controlling the frame
+
+The server pushes commands to the open slideshow over a server-sent event stream (`/api/frame/events`). The commands are plain `GET` requests with no sign-in, so any service on your network can send them:
+
+| Request | What it does |
+|---|---|
+| `GET /api/control/next` | Show the next photo |
+| `GET /api/control/info/10` | Show the info overlay for 10 seconds (default 5, up to 600) |
+| `GET /api/control/account/Kitchen` | Play another account, by name or id. URL-encode spaces, e.g. `Living%20room` |
+| `GET /api/control/state` | The active account, all accounts and how many frames are connected |
+
+`next` and `info` answer with `frames`, the number of open slideshows that heard the command. An unknown account gives `404` with `ACCOUNT_NOT_FOUND`. The slideshow reconnects by itself if the connection drops.
+
+Home Assistant example:
+
+```yaml
+rest_command:
+  frame_next:
+    url: "http://frame.local:3000/api/control/next"
+    method: GET
+  frame_account_kids:
+    url: "http://frame.local:3000/api/control/account/Kids"
+    method: GET
+```
+
+An admin session in the same browser profile as the slideshow ignores the account's folder limits, so use a separate browser profile for the frame.
+
 ## Keyboard shortcuts
 
 | Key | Slideshow |
@@ -95,7 +124,7 @@ Prefer Docker? `ADMIN_PASSWORD=yourpassword docker compose up -d` — see [DOCKE
 | `Space` / `K` | Play or pause |
 | `→` / `N` | Next photo |
 | `F` | Fullscreen |
-| `I` | Photo info |
+| `I` | Camera info (camera, lens, aperture, ISO) |
 | `Esc` | Leave fullscreen |
 
 ## Configuration
@@ -110,10 +139,11 @@ Settings live in `server/.env` (created on first `npm install`).
 | `PORT` | `3000` | Port the server listens on |
 | `UPLOAD_DIR` | `uploads` | Where photos are stored |
 | `DEFAULT_SLIDESHOW_INTERVAL` | `15000` | Time per photo, in ms |
+| `MAX_RECENT_IMAGES` | `10` | Shuffle does not start a new run on one of this many recently shown photos |
+| `SHUFFLE_PICK_AMOUNT` | `6` | Shuffle plays this many photos in a row, oldest first, from a random spot, then picks another spot |
 | `MAX_FILE_SIZE` | `26214400` | Upload limit per photo, in bytes (25 MB). Only the resized copy is stored |
-| `MAX_SCREENS` | `0` | Most screens one library can have, paired by QR code or signed in with a PIN. `0` means no limit |
 | `ENABLE_GOOGLE_PHOTOS` | `false` | Turn on Google Photos import |
-| `PUBLIC_PHOTOS` | `false` | `true` lets anyone who can reach the server see photos, thumbnails, folders and notes without signing in, as before 2026-11. Only for setups that load photos outside the slideshow, such as a home dashboard |
+| `PUBLIC_PHOTOS` | — | No longer used: photos, thumbnails, folders and notes are always open to anyone who can reach the server |
 
 Supported formats: JPEG, PNG, WebP, GIF and HEIC (iPhone photos).
 
@@ -134,6 +164,6 @@ The browser UI supports English, Spanish, French, German, Brazilian Portuguese, 
 
 [Report an issue](https://github.com/Sorbh/sora-digital-photo-frame/issues) · [Discussions](https://github.com/Sorbh/sora-digital-photo-frame/discussions)
 
-Licensed under [AGPL-3.0](LICENSE). The hosted service, Sora Frames, runs on this open core.
+Licensed under [AGPL-3.0](LICENSE).
 
 <p align="center"><sub>Built with ❤️ by Claude Code — monitored &amp; prompted by Saurabh K. Sharma</sub></p>

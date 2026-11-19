@@ -110,20 +110,4 @@ describe('Play order and photo details', () => {
     // The settings file stays out of the library and the slideshow
     expect(names(listed)).not.toContain('.sora-folder.json');
   });
-
-  test('photos carry when and where they were taken', async () => {
-    const image = await next();
-    expect(image.id).toBe('trip/c.jpg');
-    expect(image.info).toEqual({ takenAt: null, place: null, caption: null });
-
-    const goa = await next(image.id);
-    expect(goa.id).toBe('trip/a.jpg');
-    expect(goa.info).toEqual({ takenAt: '2019-03-12T18:04:00', place: 'Panaji, India', caption: null });
-
-    // The place is looked up once, then cached
-    const calls = global.fetch.mock.calls.length;
-    await next(image.id);
-    expect(global.fetch.mock.calls.length).toBe(calls);
-    expect(calls).toBe(1);
-  });
 });

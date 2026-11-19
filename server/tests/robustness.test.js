@@ -16,31 +16,20 @@ process.env.ADMIN_PASSWORD = 'test-admin-pass';
 const LocalDataStore = require('../store/LocalDataStore');
 const LocalPhotoLibrary = require('../library/LocalPhotoLibrary');
 const { createApp } = require('../app');
-const pairing = require('../services/pairingService');
+const { setDataStore } = require('../store');
 const photoInfo = require('../services/photoInfoService');
 
 // A store that can break on demand, like a database going away
 let storeDown = false;
-let noTenant = false;
 class FlakyStore extends LocalDataStore {
   async get(name, fallback) {
     if (storeDown) throw new Error('store is down');
-    if (noTenant) throw Object.assign(new Error('Authentication required'), { status: 401, code: 'AUTH_REQUIRED' });
     return super.get(name, fallback);
   }
 }
 
-let failEvents = false;
-const app = createApp({
-  dataStore: new FlakyStore(),
-  events: {
-    devicesRemoved() {
-      if (failEvents) throw new Error('host index is down');
-    }
-  }
-});
-
-const sessionCookie = res => /photoframe\.sid=([^;]+)/.exec((res.headers['set-cookie'] || []).join(';'))?.[1];
+const app = createApp();
+setDataStore(new FlakyStore());
 
 describe('Robustness', () => {
   const admin = request.agent(app);
@@ -66,22 +55,11 @@ describe('Robustness', () => {
 
   afterEach(() => {
     storeDown = false;
-    noTenant = false;
-    failEvents = false;
     jest.restoreAllMocks();
   });
 
   afterAll(async () => {
     await Promise.all([testUploadsDir, testCacheDir, testDataDir].map(dir => fs.remove(dir)));
-  });
-
-  describe('the slideshow script', () => {
-    test('sets up its decryption state in the class that uses it', async () => {
-      const source = await fs.readFile(path.join(__dirname, '../public/js/slideshow.js'), 'utf8');
-      const slideshow = source.slice(source.indexOf('class PhotoFrameSlideshow'), source.indexOf('class WeatherWidget'));
-      expect(slideshow).toContain('this.objectUrls = [null, null]');
-      expect(slideshow).toContain('this.frameKeys = new Map()');
-    });
   });
 
   describe('thumbnails', () => {
@@ -110,34 +88,6 @@ describe('Robustness', () => {
   });
 
   describe('when the store fails', () => {
-    test('a frame is not told it was unpaired', async () => {
-      storeDown = true;
-      const res = await request(app).post('/api/auth/device').send({ token: 'dev_abc.secret' });
-      expect(res.status).toBe(500);
-      expect(res.body.code).not.toBe('DEVICE_UNKNOWN');
-    });
-
-    test('a frame with no tenant to look in is told it was unpaired', async () => {
-      noTenant = true;
-      const res = await request(app).post('/api/auth/device').send({ token: 'dev_abc.secret' });
-      expect(res.status).toBe(401);
-      expect(res.body.code).toBe('DEVICE_UNKNOWN');
-    });
-
-    test('a frame can still collect its pairing on the next poll', async () => {
-      await dataStore.set('access-accounts', [{ id: 'acc_pair', name: 'Grandma', pinHash: 'x', assignedFolders: [] }]);
-      const { body: started } = await request(app).post('/api/pair/start').expect(200);
-      await pairing.approve(started.code, { name: 'Tablet', accountId: 'acc_pair' });
-      const poll = () => request(app).get('/api/pair/status').query({ code: started.code, secret: started.secret });
-
-      storeDown = true;
-      await poll().expect(500);
-      storeDown = false;
-      const { body } = await poll().expect(200);
-      expect(body.status).toBe('approved');
-      expect(body.token).toBeTruthy();
-    });
-
     test('saved photo info is not replaced after a failed read', async () => {
       await dataStore.set('photo-info', { 'family/old.webp': { key: 'k', takenAt: '2001-01-01T00:00:00' } });
       const state = photoInfo.state();
@@ -154,58 +104,6 @@ describe('Robustness', () => {
         state.info = kept; // other tests rely on what's been remembered so far
       }
     });
-
-    test('a PIN is not counted as wrong', async () => {
-      storeDown = true;
-      const res = await request(app).post('/api/auth/pin').send({ pin: '482913' });
-      expect(res.status).toBe(500);
-      expect(res.body.code).not.toBe('INVALID_PIN');
-    });
-  });
-
-  describe('when the host cannot hear about removed frames', () => {
-    const device = { id: 'dev_keep', name: 'Tablet', accountId: 'acc_keep', tokenHash: 'x', pairedAt: '2026-01-01', lastSeen: null };
-
-    beforeEach(async () => {
-      await dataStore.set('devices', [device]);
-      await dataStore.set('access-accounts', [{ id: 'acc_keep', name: 'Grandma', pinHash: 'x', assignedFolders: [] }]);
-    });
-
-    test('unpairing fails as a whole, so it can be retried', async () => {
-      failEvents = true;
-      await expect(pairing.removeDevices(d => d.id === device.id)).rejects.toThrow('host index is down');
-      expect((await dataStore.get('devices', [])).map(d => d.id)).toEqual([device.id]);
-
-      failEvents = false;
-      await expect(pairing.removeDevices(d => d.id === device.id)).resolves.toBe(1);
-      expect(await dataStore.get('devices', [])).toEqual([]);
-    });
-
-    test('deleting an account fails as a whole, too', async () => {
-      failEvents = true;
-      await admin.delete('/api/access-accounts/acc_keep').expect(500);
-      expect((await dataStore.get('access-accounts', [])).map(a => a.id)).toEqual(['acc_keep']);
-      expect((await dataStore.get('devices', [])).map(d => d.id)).toEqual([device.id]);
-    });
-
-    test('deleting an unknown account still answers 404', async () => {
-      await admin.delete('/api/access-accounts/acc_nobody').expect(404);
-      expect((await dataStore.get('devices', [])).map(d => d.id)).toEqual([device.id]);
-    });
-  });
-
-  describe('PIN sign-in', () => {
-    test('gives the session a new id', async () => {
-      await dataStore.set('access-accounts', [{ id: 'acc_pin', name: 'Grandpa', pin: '482913', assignedFolders: [] }]);
-      const agent = request.agent(app);
-      const before = sessionCookie(await agent.post('/api/auth/login').send({ password: 'test-admin-pass' }).expect(200));
-      const after = sessionCookie(await agent.post('/api/auth/pin').send({ pin: '482913' }).expect(200));
-      expect(before).toBeTruthy();
-      expect(after).toBeTruthy();
-      expect(after).not.toBe(before);
-      const session = await agent.get('/api/auth/session').expect(200);
-      expect(session.body.authenticated).toBe(true);
-    });
   });
 
   describe('captions', () => {
@@ -216,14 +114,14 @@ describe('Robustness', () => {
       jest.spyOn(photoInfo, 'placeName').mockResolvedValue('Panaji, India');
     });
 
-    test('stay private from anyone who is not signed in, along with the photo itself', async () => {
-      const res = await request(app).get('/api/images/random').expect(401);
-      expect(res.body.image).toBeUndefined();
+    test('reach the frame without signing in', async () => {
+      const res = await request(app).get('/api/images/random').expect(200);
+      expect(res.body.image.info.place).toBe('Panaji, India');
     });
 
     test('reach a signed-in viewer', async () => {
       const { body } = await admin.get('/api/images/random').expect(200);
-      expect(body.image.info).toEqual({ takenAt: known.takenAt, place: 'Panaji, India', caption: null });
+      expect(body.image.info).toEqual({ takenAt: known.takenAt, place: 'Panaji, India', caption: null, camera: null, lens: null, aperture: null, iso: null });
     });
   });
 

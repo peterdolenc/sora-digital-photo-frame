@@ -1,5 +1,6 @@
 const notes = require('../services/noteService');
 const { passClientError } = require('../utils/httpError');
+const { viewerAccount } = require('../utils/viewerAccess');
 
 class NoteController {
   // All notes for the admin Notes page, each with its current status
@@ -54,7 +55,7 @@ class NoteController {
   // Notes this frame should show now (filtered by window, audience and folders)
   async active(req, res) {
     try {
-      res.json({ success: true, notes: await notes.active(req.session) });
+      res.json({ success: true, notes: await notes.active({ authenticated: req.session?.authenticated, accessAccount: viewerAccount(req) }) });
     } catch (error) {
       if (passClientError(res, error)) return;
       console.error('Error loading active notes:', error);

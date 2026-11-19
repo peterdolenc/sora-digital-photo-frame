@@ -4,7 +4,9 @@ const path = require('path');
 const { toAdminPath, UPLOADS_DIR } = require('../utils/safePath');
 const { getLibrary } = require('../library');
 const { getDataStore } = require('../store');
-const { currentTenant } = require('../context');
+
+// Bump when readExifBuffer starts reading more fields, so cached entries are read again
+const INFO_VERSION = 2;
 
 // Nominatim asks for at most one request a second and a real user agent
 const PLACE_URL = 'https://nominatim.openstreetmap.org/reverse';
@@ -22,16 +24,13 @@ const ADMIN_SUFFIX = /\s+(municipal corporation|municipal council|municipality|m
  */
 class PhotoInfoService {
   constructor() {
-    this.states = new Map(); // tenant id -> { info, places, saveTimer }
+    this.cache = { info: null, places: null, saveTimer: null };
     this.pending = new Map();
-    this.placeQueue = Promise.resolve(); // shared: the rate limit is per server, not per tenant
+    this.placeQueue = Promise.resolve(); // one lookup at a time: the rate limit is per server
   }
 
-  // Each tenant has its own cache of photo info and place names
   state() {
-    const { id } = currentTenant();
-    if (!this.states.has(id)) this.states.set(id, { info: null, places: null, saveTimer: null });
-    return this.states.get(id);
+    return this.cache;
   }
 
   get info() { return this.state().info; } // relative path -> { key, takenAt, lat, lon }
@@ -65,11 +64,11 @@ class PhotoInfoService {
     const modifiedAt = stat.mtime.toISOString();
 
     const cached = this.info[relativePath];
-    // Entries saved before captions were read have no "caption" field: read them again
-    if (cached && cached.key === key && cached.caption !== undefined) return { ...cached, modifiedAt };
+    // Entries saved before the current set of fields was read are read again
+    if (cached && cached.key === key && cached.version === INFO_VERSION) return { ...cached, modifiedAt };
 
     const read = /\.snap\.json$/i.test(fullPath) ? await this.readSnap(fullPath) : await this.readExif(fullPath);
-    this.info[relativePath] = { key, ...read };
+    this.info[relativePath] = { key, version: INFO_VERSION, ...read };
     this.scheduleSave();
     return { ...this.info[relativePath], modifiedAt };
   }
@@ -101,6 +100,8 @@ class PhotoInfoService {
     const told = this.sentInfo(sent);
     this.info[relativePath] = {
       key: `${stat.size}:${Math.round(stat.mtimeMs)}`,
+      version: INFO_VERSION,
+      ...read,
       takenAt: read.takenAt || told.takenAt,
       lat: read.lat ?? told.lat,
       lon: read.lon ?? told.lon,
@@ -145,11 +146,29 @@ class PhotoInfoService {
         takenAt: taken instanceof Date && !isNaN(taken) ? this.localStamp(taken) : null,
         lat: hasGps ? exif.latitude : null,
         lon: hasGps ? exif.longitude : null,
-        caption: this.captionOf(exif) ?? this.xmpTitle(buffer)
+        caption: this.captionOf(exif) ?? this.xmpTitle(buffer),
+        ...this.cameraOf(exif)
       };
     } catch {
-      return { takenAt: null, lat: null, lon: null, caption: null };
+      return { takenAt: null, lat: null, lon: null, caption: null, ...this.cameraOf(null) };
     }
+  }
+
+  // Camera ("FUJIFILM X-T20"), lens, aperture (f-number) and ISO, each null when the photo doesn't say
+  cameraOf(exif) {
+    const text = value => typeof value === 'string' && value.trim() ? value.trim() : null;
+    const number = value => Number.isFinite(value) && value > 0 ? value : null;
+    const make = text(exif?.Make);
+    const model = text(exif?.Model);
+    // Many models already start with the make ("Canon EOS R5")
+    const camera = make && model && !model.toLowerCase().startsWith(make.toLowerCase()) ? `${make} ${model}` : model || make;
+    const fNumber = number(exif?.FNumber);
+    return {
+      camera,
+      lens: text(exif?.LensModel),
+      aperture: fNumber && Math.round(fNumber * 10) / 10,
+      iso: number(exif?.ISO)
+    };
   }
 
   // IFD0 ImageDescription, else the XMP dc:title (a plain string, a { lang, value } pair, or a list of them)
@@ -179,7 +198,7 @@ class PhotoInfoService {
   async readSnap(fullPath) {
     const snap = await getLibrary().readItem(toAdminPath(fullPath))
       .then(buffer => JSON.parse(buffer.toString('utf8'))).catch(() => ({}));
-    return { takenAt: snap.createdAt || null, lat: null, lon: null, caption: null };
+    return { takenAt: snap.createdAt || null, lat: null, lon: null, caption: null, ...this.cameraOf(null) };
   }
 
   // Cameras store wall-clock time with no zone; keep it that way ("2019-03-12T18:04:00")

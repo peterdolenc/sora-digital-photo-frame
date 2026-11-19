@@ -1,5 +1,4 @@
-// Mock tenant and ordering so pickShuffled can be tested on its own
-jest.mock('../context', () => ({ currentTenant: () => ({ id: 'test' }) }));
+// Mock the ordering so pickShuffled can be tested on its own
 jest.mock('../services/playOrderService', () => ({
   // Photos are named by their date rank, so oldest first is by id
   sort: jest.fn(async (dir, items) => [...items].sort((a, b) => a.id.localeCompare(b.id)))
@@ -16,7 +15,8 @@ const take = async (images, count, dir = 'dir') => {
 
 describe('pickShuffled', () => {
   beforeEach(() => {
-    controller.states.clear();
+    controller.recentlyShown = new Set();
+    controller.shuffleQueue = { key: null, items: [] };
     controller.shufflePickAmount = 3;
     jest.spyOn(Math, 'random');
   });

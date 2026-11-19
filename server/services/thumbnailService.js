@@ -7,7 +7,6 @@ const { UPLOADS_DIR, CACHE_DIR: CACHE_ROOT } = require('../config/paths');
 const { toAdminPath } = require('../utils/safePath');
 const { getLibrary } = require('../library');
 const { jpegCopy, acceptsWebp } = require('../middleware/webpFallback');
-const { currentTenant, DEFAULT_TENANT } = require('../context');
 
 const CACHE_DIR = path.join(CACHE_ROOT, 'thumbs');
 const IMAGE_PATTERN = /\.(jpg|jpeg|png|gif|webp|avif|jxl|heic)$/i;
@@ -39,11 +38,8 @@ class ThumbnailService {
   }
 
   cachePathFor(sourcePath) {
-    // Tenants share admin paths ("uploads/Family/..."), so their thumbnails must not
-    const { id } = currentTenant();
-    const scope = id === DEFAULT_TENANT.id ? '' : `${id}/`;
     const key = crypto.createHash('sha1')
-      .update(`${scope}${path.relative(UPLOADS_DIR, sourcePath)}:${THUMB_SIZE}`)
+      .update(`${path.relative(UPLOADS_DIR, sourcePath)}:${THUMB_SIZE}`)
       .digest('hex');
     return path.join(CACHE_DIR, `${key}.webp`);
   }
@@ -129,7 +125,7 @@ class ThumbnailService {
    */
   send(res, thumbPath, { versioned = true } = {}) {
     // Versioned URLs (?v=...) change with the source, so they can be cached for long
-    // private: tenants share these URLs, so a shared cache must never keep one
+    // private: a shared cache must never keep one
     res.set('Cache-Control', versioned
       ? 'private, max-age=604800, immutable'
       : 'private, max-age=300, stale-while-revalidate=86400');

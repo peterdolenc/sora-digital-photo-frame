@@ -6,31 +6,29 @@ const accessAccountController = require('../controllers/accessAccountController'
 const googlePhotosController = require('../controllers/googlePhotosController');
 const noteController = require('../controllers/noteController');
 const snapController = require('../controllers/snapController');
-const pairingController = require('../controllers/pairingController');
-const frameKeyController = require('../controllers/frameKeyController');
+const frameController = require('../controllers/frameController');
 const upload = require('../middleware/upload');
-const { requireAuth, requireViewer, requirePhotoViewer } = require('../middleware/auth');
-const { keepTenant } = require('../context');
+const { requireAuth } = require('../middleware/auth');
 
 // Health check endpoint
 router.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Slideshow routes: signed-in viewers only (admin, PIN account or paired frame) unless PUBLIC_PHOTOS is on
-router.get('/random-image', requirePhotoViewer, imageController.getRandomImage.bind(imageController));
-router.get('/images/random', requirePhotoViewer, imageController.getRandomImage.bind(imageController)); // New endpoint for consistency
-router.get('/images/next', requirePhotoViewer, imageController.getRandomImage.bind(imageController)); // follows the folder's play order
-router.get('/images/:imageId/thumbnail', requirePhotoViewer, imageController.getImageThumbnail.bind(imageController));
+// Slideshow routes: open to the local network (the account being played decides what is shown)
+router.get('/random-image', imageController.getRandomImage.bind(imageController));
+router.get('/images/random', imageController.getRandomImage.bind(imageController)); // New endpoint for consistency
+router.get('/images/next', imageController.getRandomImage.bind(imageController)); // follows the folder's play order
+router.get('/images/:imageId/thumbnail', imageController.getImageThumbnail.bind(imageController));
 
 // Folder routes for the slideshow
-router.get('/folders', requirePhotoViewer, folderController.getFolderStructure.bind(folderController));
+router.get('/folders', folderController.getFolderStructure.bind(folderController));
 // Thumbnail route must come first: the (*) catch-all below would swallow it
-router.get('/folders/:folderPath(*)/thumbnail', requirePhotoViewer, folderController.getFolderThumbnail.bind(folderController));
-router.get('/folders/:folderPath(*)', requirePhotoViewer, folderController.getFolderStructure.bind(folderController));
+router.get('/folders/:folderPath(*)/thumbnail', folderController.getFolderThumbnail.bind(folderController));
+router.get('/folders/:folderPath(*)', folderController.getFolderStructure.bind(folderController));
 
 // Protected routes (authentication required)
-router.post('/upload', requireAuth, upload.array('images'), keepTenant, imageController.uploadImages.bind(imageController));
+router.post('/upload', requireAuth, upload.array('images'), imageController.uploadImages.bind(imageController));
 router.delete('/images', requireAuth, imageController.deleteImage.bind(imageController));
 router.delete('/images/batch', requireAuth, imageController.batchDeleteImages.bind(imageController));
 router.post('/images/rotate', requireAuth, imageController.rotateImage.bind(imageController));
@@ -47,13 +45,11 @@ router.get('/access-accounts', requireAuth, accessAccountController.getAllAccoun
 router.post('/access-accounts', requireAuth, accessAccountController.createAccount.bind(accessAccountController));
 router.put('/access-accounts/:id', requireAuth, accessAccountController.updateAccount.bind(accessAccountController));
 router.delete('/access-accounts/:id', requireAuth, accessAccountController.deleteAccount.bind(accessAccountController));
-router.get('/admin/family-code', requireAuth, accessAccountController.getFamilyCode.bind(accessAccountController));
-router.post('/admin/family-code', requireAuth, accessAccountController.renewFamilyCode.bind(accessAccountController));
 
 // Notes shown in the slideshow (admin manages, frames read their active ones)
 router.get('/notes', requireAuth, noteController.list.bind(noteController));
 router.post('/notes', requireAuth, noteController.create.bind(noteController));
-router.get('/notes/active', requirePhotoViewer, noteController.active.bind(noteController));
+router.get('/notes/active', noteController.active.bind(noteController));
 router.put('/notes/:id', requireAuth, noteController.update.bind(noteController));
 router.delete('/notes/:id', requireAuth, noteController.remove.bind(noteController));
 
@@ -70,24 +66,12 @@ router.get('/features', requireAuth, (req, res) => {
     });
 });
 
-// PIN authentication routes (public)
-router.post('/auth/pin', accessAccountController.authenticateWithPin.bind(accessAccountController));
-router.get('/auth/session', accessAccountController.getSession.bind(accessAccountController));
-router.delete('/auth/session', accessAccountController.clearSession.bind(accessAccountController));
-
-// Keys for frames that decrypt photos themselves (remote encrypted storage only)
-router.get('/frame/keys', requireViewer, frameKeyController.get.bind(frameKeyController));
-
-// Pairing a frame by QR code: the frame starts and waits, an admin approves
-router.post('/pair/start', pairingController.start.bind(pairingController));
-router.get('/pair/status', pairingController.status.bind(pairingController));
-router.post('/auth/device', pairingController.signIn.bind(pairingController));
-router.get('/admin/pair/:code', requireAuth, pairingController.show.bind(pairingController));
-router.post('/admin/pair/:code/approve', requireAuth, pairingController.approve.bind(pairingController));
-router.get('/admin/devices', requireAuth, pairingController.listDevices.bind(pairingController));
-router.put('/admin/devices/:id/language', requireAuth, pairingController.setDeviceLanguage.bind(pairingController));
-router.put('/device/language', requireViewer, pairingController.setOwnLanguage.bind(pairingController));
-router.delete('/admin/devices/:id', requireAuth, pairingController.removeDevice.bind(pairingController));
+// The frame is controlled by the server, and by other services on the local network (open, no sign-in)
+router.get('/frame/events', frameController.events.bind(frameController));
+router.get('/control/state', frameController.state.bind(frameController));
+router.get('/control/next', frameController.next.bind(frameController));
+router.get('/control/info/:seconds?', frameController.info.bind(frameController));
+router.get('/control/account/:account', frameController.account.bind(frameController));
 
 // Google Photos routes (admin only) - conditionally enabled
 if (process.env.ENABLE_GOOGLE_PHOTOS === 'true') {

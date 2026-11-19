@@ -2,11 +2,9 @@ const { KEY_LENGTH } = require('./photoCipher');
 
 /**
  * Where encryption keys come from. A key provider has:
- *   currentKey() -> { id, key }  key to encrypt new data with, for the current tenant
- *   getKey(id)   -> key or null  key to decrypt data that names `id` (null if unknown
- *                                or not the current tenant's)
- * Either may return a promise. A hosted setup passes its own (per-tenant keys
- * wrapped by a master key); self-hosted installs can set PHOTO_ENCRYPTION_KEY.
+ *   currentKey() -> { id, key }  key to encrypt new data with,
+ *   getKey(id)   -> key or null  key to decrypt data that names `id` (null if unknown)
+ * Either may return a promise. Set PHOTO_ENCRYPTION_KEY to encrypt photos and data at rest.
  */
 class StaticKeyProvider {
   /**

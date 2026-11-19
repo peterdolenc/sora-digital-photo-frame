@@ -38,7 +38,7 @@ const ADMIN_KEY = 'admin';
 const adminLimiter = new AttemptLimiter({ maxAttempts: 20, attemptWindow: 15 * 60 * 1000 });
 
 // Check if user is authenticated (default: the admin password session)
-const sessionRequireAuth = (req, res, next) => {
+const requireAuth = (req, res, next) => {
   console.log('🔐 Auth Check:', {
     hasSession: !!req.session,
     authenticated: req.session?.authenticated,
@@ -98,7 +98,7 @@ const sessionRequireAuth = (req, res, next) => {
 const safeNext = (value) => (typeof value === 'string' && /^\/(?![\/\\])/.test(value) ? value : null);
 
 // Check if user is NOT authenticated (for login page)
-const sessionRequireGuest = (req, res, next) => {
+const requireGuest = (req, res, next) => {
   if (req.session && req.session.authenticated) {
     return res.redirect(safeNext(req.query.next) || '/admin');
   }
@@ -172,40 +172,10 @@ const getAuthStatus = (req, res) => {
   });
 };
 
-// Someone allowed to watch the slideshow: the admin, a PIN account or a paired frame
-const sessionRequireViewer = (req, res, next) => {
-  if (req.session && (req.session.authenticated || req.session.accessAccount)) return next();
-  return res.status(401).json({ message: 'Authentication required', code: 'AUTH_REQUIRED' });
-};
-
-// A hosted setup can swap in its own sign-in, e.g. Google accounts.
-// provider: { requireAuth, requireGuest, requireViewer } middleware, all optional.
-let provider = {};
-
-const setAuthProvider = (next) => {
-  provider = next || {};
-};
-
-const requireAuth = (req, res, next) => (provider.requireAuth || sessionRequireAuth)(req, res, next);
-const requireGuest = (req, res, next) => (provider.requireGuest || sessionRequireGuest)(req, res, next);
-const requireViewer = (req, res, next) => (provider.requireViewer || sessionRequireViewer)(req, res, next);
-
-// Photos, thumbnails, folders and notes are for viewers only: the admin, a PIN
-// account or a paired frame. PUBLIC_PHOTOS=true (or createApp({ publicPhotos }))
-// keeps the old open behaviour for setups that load photos without signing in,
-// e.g. a home dashboard that shows /api/images/random.
-let publicPhotos = false;
-const setPublicPhotos = (value) => { publicPhotos = value === true; };
-const requirePhotoViewer = (req, res, next) => (publicPhotos ? next() : requireViewer(req, res, next));
-
 module.exports = {
   requireAuth,
   requireGuest,
-  requireViewer,
-  requirePhotoViewer,
   announceAdminPassword,
-  setAuthProvider,
-  setPublicPhotos,
   login,
   logout,
   getAuthStatus

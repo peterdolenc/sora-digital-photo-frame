@@ -9,7 +9,7 @@ const errorHandler = require('./middleware/errorHandler');
 const webpFallback = require('./middleware/webpFallback');
 const media = require('./middleware/media');
 const sameOrigin = require('./middleware/sameOrigin');
-const freshViewer = require('./middleware/freshViewer');
+const activeAccount = require('./middleware/activeAccount');
 const { requireVisiblePhoto } = require('./utils/viewerAccess');
 const EncryptedPhotoLibrary = require('./library/EncryptedPhotoLibrary');
 const EncryptedDataStore = require('./store/EncryptedDataStore');
@@ -20,58 +20,31 @@ const LocalPhotoLibrary = require('./library/LocalPhotoLibrary');
 const { setLibrary } = require('./library');
 const LocalDataStore = require('./store/LocalDataStore');
 const { setDataStore } = require('./store');
-const { tenantMiddleware } = require('./context');
-const { setQuota } = require('./services/quotaService');
-const { setAuthProvider, setPublicPhotos, requirePhotoViewer, announceAdminPassword } = require('./middleware/auth');
+const { announceAdminPassword } = require('./middleware/auth');
 const { sessionSecret, announceSessionSecret } = require('./utils/sessionSecret');
-const { setEvents } = require('./events');
-const accessAccounts = require('./controllers/accessAccountController');
 
 /**
- * Build the photo frame app. The self-hosted server calls this with no
- * options; a hosted deployment can pass its own pieces in.
+ * Build the photo frame app.
  *
  * Options:
- *   sessionStore  express-session store (default: in-memory)
- *   library       photo storage implementation (default: local uploads folder)
- *   dataStore     JSON document storage (default: local data, cache and folder files)
- *   resolveTenant async function(req) -> { id, plan } or null (default: one 'default' tenant)
- *   auth          { requireAuth, requireGuest, requireViewer } middleware, all optional
- *                 (default: admin password session)
- *   quota         { canAdd(bytes) -> { ok, message } } for the current tenant (default: unlimited)
- *   events        { devicePaired, devicesRemoved, familyCodeSet } handlers (see events.js)
- *   pinSignIn     false turns off PIN sign-in for frames
  *   trustProxy    Express 'trust proxy' setting (default: TRUST_PROXY, else 1 = one proxy in front)
- *   publicPhotos  true lets anyone who can reach the server load photos, thumbnails, folders
- *                 and notes without signing in, as before (default: PUBLIC_PHOTOS=true, else off)
- *   familyCode    true: a frame signing in with a PIN also gives its family code, so a
- *                 hosted resolveTenant can tell whose frame it is (see familyCodeService)
  *   keys          key provider ({ currentKey, getKey }, see crypto/keys.js) to encrypt photos
  *                 and data at rest (default: PHOTO_ENCRYPTION_KEY, or no encryption)
- *   beforeRoutes  function(app) run after core middleware, before core routes,
- *                 e.g. to mount extra sign-in routes
  */
-function createApp({ sessionStore, beforeRoutes, library, dataStore, resolveTenant, auth, quota, events, pinSignIn = true, trustProxy = process.env.TRUST_PROXY, publicPhotos = process.env.PUBLIC_PHOTOS === 'true', familyCode = false, keys = keysFromEnv() } = {}) {
+function createApp({ trustProxy = process.env.TRUST_PROXY, keys = keysFromEnv() } = {}) {
   announceSessionSecret();
   const secret = sessionSecret();
 
   const app = express();
-  let photoLibrary = library || new LocalPhotoLibrary();
-  let store = dataStore || new LocalDataStore();
+  let photoLibrary = new LocalPhotoLibrary();
+  let store = new LocalDataStore();
   if (keys) {
     photoLibrary = new EncryptedPhotoLibrary(photoLibrary, keys);
     store = new EncryptedDataStore(store, keys);
   }
   setLibrary(photoLibrary);
   setDataStore(store);
-  setAuthProvider(auth);
-  if (!auth?.requireAuth) announceAdminPassword();
-  setPublicPhotos(publicPhotos);
-  if (publicPhotos) console.warn('⚠️  PUBLIC_PHOTOS is on: anyone who can reach this server can see your photos and notes without signing in.');
-  setQuota(quota);
-  setEvents(events);
-  accessAccounts.pinSignIn = pinSignIn !== false;
-  accessAccounts.familyCode = familyCode === true;
+  announceAdminPassword();
 
   // Which X-Forwarded-* headers to believe (client address, https). The default, 1,
   // fits one reverse proxy in front. With nothing in front, set TRUST_PROXY=false,
@@ -84,7 +57,6 @@ function createApp({ sessionStore, beforeRoutes, library, dataStore, resolveTena
 
   app.use(session({
     secret,
-    store: sessionStore,
     resave: false,
     saveUninitialized: false,
     name: 'photoframe.sid', // Custom session cookie name
@@ -99,16 +71,16 @@ function createApp({ sessionStore, beforeRoutes, library, dataStore, resolveTena
   app.use(logger);
   // Changes only from this site's own pages (see middleware/sameOrigin)
   app.use(sameOrigin);
-  app.use(tenantMiddleware(resolveTenant));
-  // Removed screens and accounts stop working, and folder changes arrive, within 30 seconds
-  app.use(['/api', '/uploads'], freshViewer);
+  // The account being played decides which photos are shown
+  app.use('/api', activeAccount.invalidateOnChange);
+  app.use(['/api/random-image', '/api/images', '/api/folders', '/api/notes', '/uploads'], activeAccount);
 
   // Static files
   if (photoLibrary.staticDir) {
-    app.use('/uploads', requirePhotoViewer, requireVisiblePhoto, webpFallback(photoLibrary.staticDir), express.static(photoLibrary.staticDir));
+    app.use('/uploads', requireVisiblePhoto, webpFallback(photoLibrary.staticDir), express.static(photoLibrary.staticDir));
   } else {
     // Encrypted or remote storage: serve through the library (decrypts on the server)
-    app.use('/uploads', requirePhotoViewer, requireVisiblePhoto, media());
+    app.use('/uploads', requireVisiblePhoto, media());
   }
   app.use('/js', express.static(path.join(__dirname, 'public/js')));
   app.use('/admin', express.static(path.join(__dirname, 'public')));
@@ -119,8 +91,6 @@ function createApp({ sessionStore, beforeRoutes, library, dataStore, resolveTena
 
   // Browsers ask for /favicon.ico on their own
   app.get('/favicon.ico', (req, res) => res.sendFile(path.join(__dirname, 'public/icons/favicon.ico')));
-
-  if (beforeRoutes) beforeRoutes(app);
 
   app.use('/', routes);
 

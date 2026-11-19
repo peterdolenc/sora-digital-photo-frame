@@ -6,7 +6,6 @@ Thanks for helping improve SORA Frame.
 2. Run `npm test` before opening a pull request.
 3. Keep pull requests focused on one change.
 
-Changing an option of `createApp()`? See [HOOKS.md](HOOKS.md): those options are a public contract.
 
 ## Sign your commits (DCO)
 
@@ -21,7 +20,6 @@ git commit -s -m "fix: describe the change"
 
 Contributions are licensed under the [AGPL-3.0](LICENSE).
 
-The maintainers also run a hosted service, Sora Frames, built on this code.
 By submitting a contribution, you also grant the maintainers a perpetual, worldwide,
 royalty-free license to use, modify and distribute it under other terms, including
 in Sora Frames. You keep the copyright to your work.

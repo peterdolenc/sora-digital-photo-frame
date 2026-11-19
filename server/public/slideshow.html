@@ -25,90 +25,6 @@
 </head>
 
 <body>
-    <!-- Authentication Overlay -->
-    <div class="auth-overlay" id="authOverlay">
-        <div class="sora-grain" aria-hidden="true"></div>
-
-        <header class="auth-top">
-            <span class="sora-wordmark">Sora</span>
-            <span class="sora-eyebrow" data-i18n="slideshow.photo_frame">Photo frame</span>
-        </header>
-
-        <main class="auth-panel">
-            <header class="auth-intro">
-                <p class="sora-eyebrow" data-i18n="slideshow.private_gallery">Private gallery</p>
-                <h1 class="auth-title sora-display" data-i18n-html="slideshow.welcome_home">Welcome <em>home</em></h1>
-                <p class="auth-sub" data-i18n="slideshow.enter_pin">Enter your PIN, or scan the code to set up this frame.</p>
-            </header>
-
-            <section class="auth-pin">
-
-            <form id="pinForm" novalidate>
-                <label class="family-field hidden" id="familyField">
-                    <span data-i18n="slideshow.familyCodeLabel">Family code</span>
-                    <input type="text" id="familyCodeInput" maxlength="9" autocomplete="off" autocapitalize="characters"
-                        spellcheck="false" placeholder="ABCD-EFGH" enterkeyhint="next">
-                </label>
-                <div class="pin-field">
-                    <input type="password" id="pinInput" maxlength="6" autocomplete="off" inputmode="numeric"
-                        pattern="[0-9]*" aria-label="PIN, 4 to 6 digits" data-i18n-attr="aria-label:slideshow.static_005">
-                    <div class="pin-cells" aria-hidden="true">
-                        <span class="pin-cell is-next"></span>
-                        <span class="pin-cell"></span>
-                        <span class="pin-cell"></span>
-                        <span class="pin-cell"></span>
-                        <span class="pin-cell"></span>
-                        <span class="pin-cell"></span>
-                    </div>
-                </div>
-
-                <div class="auth-status" aria-live="polite">
-                    <div class="auth-error hidden" id="authErrorAlert" role="alert">
-                        <span class="material-icons">error</span>
-                        <span id="authErrorMessage"></span>
-                    </div>
-                    <div class="auth-loading hidden" id="authLoading" data-i18n="slideshow.checking">Checking</div>
-                </div>
-
-                <div class="keypad">
-                    <button type="button" class="key" data-key="1">1</button>
-                    <button type="button" class="key" data-key="2">2</button>
-                    <button type="button" class="key" data-key="3">3</button>
-                    <button type="button" class="key" data-key="4">4</button>
-                    <button type="button" class="key" data-key="5">5</button>
-                    <button type="button" class="key" data-key="6">6</button>
-                    <button type="button" class="key" data-key="7">7</button>
-                    <button type="button" class="key" data-key="8">8</button>
-                    <button type="button" class="key" data-key="9">9</button>
-                    <button type="button" class="key ghost" data-key="back" aria-label="Delete digit" data-i18n-attr="aria-label:slideshow.static_006">
-                        <span class="material-icons">backspace</span>
-                    </button>
-                    <button type="button" class="key" data-key="0">0</button>
-                    <button type="submit" class="key go" id="authButton" aria-label="Unlock" data-i18n-attr="aria-label:slideshow.static_007">
-                        <span class="material-icons">arrow_forward</span>
-                    </button>
-                </div>
-            </form>
-            </section>
-
-            <aside class="auth-pair" id="pairCard" aria-labelledby="pairTitle">
-                <div class="pair-qr" id="pairQr" role="img" aria-label="QR code to set up this frame" data-i18n-attr="aria-label:slideshow.static_008"></div>
-                <div class="pair-text">
-                    <p class="sora-eyebrow" id="pairTitle" data-i18n="slideshow.no_keyboard">No keyboard?</p>
-                    <p class="pair-lede" data-i18n="slideshow.scan_phone">Scan with your phone to set up this frame.</p>
-                    <p class="pair-code-label" id="pairHint"></p>
-                    <p class="pair-code" id="pairCode" aria-live="polite">······</p>
-                    <p class="pair-status" id="pairStatus" aria-live="polite"></p>
-                </div>
-            </aside>
-        </main>
-
-        <footer class="auth-foot">
-            <span class="sora-eyebrow" data-i18n="slideshow.static_002">4 to 6 digits</span>
-            <a href="/login"><span class="material-icons">photo_library</span><span data-i18n="slideshow.manageLibrary">Manage library</span></a>
-        </footer>
-    </div>
-
     <!-- Slideshow Container -->
     <div class="slideshow-container" id="slideshowContainer">
         <!-- Photo Slides -->
@@ -175,9 +91,6 @@
             <button class="dock-btn" id="languageBtn" aria-label="Language" title="Language" data-i18n-attr="aria-label:slideshow.static_017; title:slideshow.static_018">
                 <span class="material-icons">language</span>
             </button>
-            <button class="dock-btn" id="logoutBtn" aria-label="Lock frame" title="Lock frame" data-i18n-attr="aria-label:slideshow.static_019; title:slideshow.static_020">
-                <span class="material-icons">lock</span>
-            </button>
         </div>
 
         <!-- Weather and Clock Widget -->
@@ -203,9 +116,9 @@
 
         <!-- Info Overlay -->
         <div class="info-overlay hidden" id="infoOverlay">
-            <div class="sora-eyebrow" data-i18n="slideshow.static_004">Now showing</div>
-            <div id="folder"></div>
-            <div id="filename"></div>
+            <div id="infoCamera"></div>
+            <div id="infoLens"></div>
+            <div id="infoExposure"></div>
         </div>
     </div>
 
@@ -225,7 +138,6 @@
 
     <script src="/js/notePage.js"></script>
     <script src="/js/noteScheduler.js"></script>
-    <script src="/js/photoCipher.js"></script>
     <script src="/js/slideshow.js"></script>
     <script>
       document.addEventListener('DOMContentLoaded', () => {
@@ -235,7 +147,7 @@
         fill(); window.addEventListener('sora:languagechange', fill);
         document.getElementById('languageBtn').onclick = () => modal.showModal();
         document.getElementById('closeLanguage').onclick = () => modal.close();
-        select.onchange = async () => { await i18n.setLanguage(select.value, false); await fetch('/api/device/language', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({language: select.value}) }); };
+        select.onchange = async () => { await i18n.setLanguage(select.value, false); };
       });
     </script>
 </body>

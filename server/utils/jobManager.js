@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const path = require('path');
-const { currentTenant } = require('../context');
 const { isGooglePhotoUrl, fetchGooglePhoto } = require('./googleUrls');
 const { displayCopy } = require('./displayCopy');
 const { resolveAdminPath } = require('./safePath');
@@ -23,7 +22,6 @@ class JobManager {
       status: 'pending', // pending, running, completed, failed
       data,
       userId,
-      tenantId: currentTenant().id,
       createdAt: new Date(),
       startedAt: null,
       completedAt: null,
@@ -81,7 +79,6 @@ class JobManager {
   async executeGooglePhotosImport(job) {
     const { mediaItems, destinationPath, accessToken } = job.data;
     const { getLibrary } = require('../library');
-    const { assertCanAdd } = require('../services/quotaService');
 
     console.log('🔧 [DEBUG] Executing Google Photos import job:', job.id);
     console.log('🔧 [DEBUG] Importing', mediaItems.length, 'photos to', destinationPath);
@@ -91,19 +88,12 @@ class JobManager {
 
     // Ensure destination folder exists (the library refuses paths outside uploads/)
     await getLibrary().createFolder(destinationPath);
-    let quotaReached = false;
 
     const importResults = [];
 
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
       
-      if (quotaReached) {
-        job.progress.failed++;
-        importResults.push({ id: item.id, success: false, error: 'Storage limit reached' });
-        continue;
-      }
-
       try {
         console.log('🔧 [DEBUG] Processing item', i + 1, 'of', mediaItems.length, ':', item.id);
 
@@ -157,7 +147,6 @@ class JobManager {
           continue;
         }
         const filename = `google-${Date.now()}-${Math.round(Math.random() * 1E9)}.webp`;
-        await assertCanAdd(imageBuffer.length);
         const added = await getLibrary().addPhoto(destinationPath, {
           buffer: imageBuffer,
           originalName: filename,
@@ -181,7 +170,6 @@ class JobManager {
 
       } catch (error) {
         console.error('❌ [DEBUG] Error importing photo:', item.id, error);
-        if (error.code === 'QUOTA_EXCEEDED') quotaReached = true;
         job.progress.failed++;
         importResults.push({
           id: item.id,
@@ -218,8 +206,7 @@ class JobManager {
   // Get job status (public info only)
   getJobStatus(jobId) {
     const job = this.getJob(jobId);
-    // Another tenant's job looks the same as no job
-    if (!job || job.tenantId !== currentTenant().id) {
+    if (!job) {
       return null;
     }
 

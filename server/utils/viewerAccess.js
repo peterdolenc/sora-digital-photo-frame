@@ -1,5 +1,5 @@
-// Which photos a viewer may see. The admin, and PIN accounts or frames with no
-// folders assigned, see everything. An account with assigned folders sees those
+// Which photos the frame may show. The admin, and an account with no folders
+// assigned, see everything. An account with assigned folders sees those
 // folders and everything inside them; folders above them can be opened to get
 // there, but show only what leads to the assigned ones.
 const path = require('path');
@@ -7,11 +7,15 @@ const path = require('path');
 // family\\x/../y -> family/y, so ".." can't step out of an assigned folder
 const norm = (value) => path.posix.normalize('/' + String(value || '').replace(/\\/g, '/')).replace(/^\/+|\/+$/g, '');
 
+// The account whose folders limit what is shown: the one the server is playing (see frameService)
+function viewerAccount(req) {
+  return req.activeAccount || null;
+}
+
 // The assigned folders, or null for no limit
 function assignedFolders(req) {
-  const session = req.session;
-  if (!session || session.authenticated) return null;
-  const folders = session.accessAccount?.assignedFolders;
+  if (req.session?.authenticated) return null;
+  const folders = viewerAccount(req)?.assignedFolders;
   return Array.isArray(folders) && folders.length ? folders.map(norm).filter(Boolean) : null;
 }
 
@@ -49,4 +53,4 @@ function requireVisiblePhoto(req, res, next) {
   return res.status(404).json({ message: 'Not found', code: 'NOT_FOUND' });
 }
 
-module.exports = { assignedFolders, canSee, canOpen, foldersBelow, requireVisiblePhoto };
+module.exports = { viewerAccount, assignedFolders, canSee, canOpen, foldersBelow, requireVisiblePhoto };

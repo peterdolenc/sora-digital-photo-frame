@@ -123,25 +123,6 @@ body {
     color: var(--destructive);
 }
 
-.pin-reveal {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 4px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--muted-foreground);
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    letter-spacing: 0.2em;
-    cursor: help;
-}
-
-.pin-reveal .material-symbols-outlined {
-    font-size: 16px;
-}
-
 .account-stats {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -160,51 +141,6 @@ body {
 .account-stats dd {
     margin: 4px 0 0;
     font-weight: 600;
-}
-
-/* Frames paired by QR code */
-.paired-frames {
-    display: grid;
-    gap: 6px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border, var(--paper-sunk));
-}
-
-.paired-label {
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--muted-foreground);
-}
-
-.paired-frame {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.paired-frame > .material-symbols-outlined {
-    font-size: 20px;
-    color: var(--berry);
-}
-
-.paired-text {
-    display: grid;
-    flex: 1;
-    min-width: 0;
-}
-
-.paired-name {
-    overflow: hidden;
-    font-weight: 600;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-}
-
-.paired-seen {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
 }
 
 .folder-tags {
@@ -370,45 +306,3 @@ body {
     #accountModal > article { max-height: calc(100dvh - 2rem); }
 }
 .toast-error .material-icons { color: #f6a189; }
-
-/* ---------- Family code (hosted) -------------------------------- */
-
-.family-code-card {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px 24px;
-    margin-bottom: clamp(1rem, 2vw, 1.5rem);
-    padding: 20px 22px;
-    border: 1px solid var(--rule);
-    border-radius: var(--shape-md);
-    background: var(--paper-raised);
-    box-shadow: var(--shadow-soft);
-}
-
-.family-code-card.hidden {
-    display: none;
-}
-
-.family-code-text {
-    display: grid;
-    gap: 6px;
-    max-width: 60ch;
-}
-
-.family-code-text p {
-    margin: 0;
-}
-
-.family-code {
-    font-size: 1.6rem;
-    font-weight: 500;
-    letter-spacing: 0.18em;
-    color: var(--ink);
-}
-
-.family-code-help {
-    font-size: 0.9rem;
-    color: var(--ink-soft, var(--muted-foreground));
-}

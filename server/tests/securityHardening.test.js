@@ -13,7 +13,6 @@ process.env.ADMIN_PASSWORD = 'harden-admin-pass';
 delete process.env.PHOTO_ENCRYPTION_KEY;
 
 const { createApp } = require('../app');
-const accessAccounts = require('../controllers/accessAccountController');
 const AttemptLimiter = require('../utils/attemptLimiter');
 const { isGooglePhotoUrl } = require('../utils/googleUrls');
 
@@ -26,33 +25,6 @@ const signedInAdmin = async (app) => {
   await admin.post('/api/auth/login').send({ password: 'harden-admin-pass' }).expect(200);
   return admin;
 };
-
-describe('PIN guessing', () => {
-  const app = createApp();
-  beforeEach(() => accessAccounts.limiter.entries.clear());
-
-  test('a made-up X-Forwarded-For per try does not get around the limit', async () => {
-    const admin = await signedInAdmin(app);
-    await admin.post('/api/access-accounts').send({ name: 'Kitchen', pin: '736251' }).expect(201);
-
-    const statuses = [];
-    for (let i = 0; i < 8; i++) {
-      const res = await request(app).post('/api/auth/pin').set('X-Forwarded-For', `10.0.0.${i}`).send({ pin: `11111${i}` });
-      statuses.push(res.status);
-    }
-    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
-    expect(statuses.slice(5)).toEqual([429, 429, 429]);
-    // Even the right PIN waits until the lockout is over
-    await request(app).post('/api/auth/pin').set('X-Forwarded-For', '10.0.1.1').send({ pin: '736251' }).expect(429);
-  });
-
-  test('a burst sent all at once gets no more than five tries', async () => {
-    const results = await Promise.all(Array.from({ length: 12 }, (_, i) =>
-      request(app).post('/api/auth/pin').set('X-Forwarded-For', `10.1.0.${i}`).send({ pin: `22222${i % 10}` })));
-    expect(results.filter(r => r.status === 401).length).toBeLessThanOrEqual(5);
-    expect(results.filter(r => r.status === 429).length).toBeGreaterThanOrEqual(7);
-  });
-});
 
 describe('the attempt limiter', () => {
   test('each lockout in a row lasts twice as long, up to the cap', () => {
@@ -129,9 +101,9 @@ describe('changes only from this site', () => {
   test('a form sent from another site on the same network is refused', async () => {
     const admin = await signedInAdmin(app);
     await admin.post('/api/access-accounts').set('Sec-Fetch-Site', 'same-site')
-      .type('form').send('name=Evil&pin=999999').expect(403);
+      .type('form').send('name=Evil').expect(403);
     await admin.post('/api/access-accounts').set('Origin', 'http://192.168.1.1:8080')
-      .type('form').send('name=Evil&pin=999998').expect(403);
+      .type('form').send('name=Evil').expect(403);
     const { body } = await admin.get('/api/access-accounts').expect(200);
     expect(JSON.stringify(body)).not.toContain('Evil');
   });

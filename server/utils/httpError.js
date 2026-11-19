@@ -1,6 +1,5 @@
 /**
- * Answer with the error's own status when it is a client error, e.g. a
- * hosted library throwing 401 AUTH_REQUIRED for a signed-out request.
+ * Answer with the error's own status when it is a client error.
  * Returns true when it answered, so a catch block can stop there.
  */
 function passClientError(res, error) {

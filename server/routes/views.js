@@ -14,6 +14,5 @@ router.get('/admin', requireAuth, viewController.serveAdmin.bind(viewController)
 router.get('/access-accounts', requireAuth, viewController.serveAccessAccounts.bind(viewController));
 router.get('/notes', requireAuth, viewController.serveNotes.bind(viewController));
 router.get('/snap', requireAuth, viewController.serveSnap.bind(viewController));
-router.get('/pair', requireAuth, viewController.servePair.bind(viewController));
 
 module.exports = router;

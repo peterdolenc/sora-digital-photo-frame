@@ -15,7 +15,6 @@ process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 process.env.ADMIN_PASSWORD = 'test-admin-pass';
 
 const cipher = require('../crypto/photoCipher');
-const browserCipher = require('../public/js/photoCipher');
 const { StaticKeyProvider, keysFromEnv } = require('../crypto/keys');
 const { createApp } = require('../app');
 
@@ -58,14 +57,6 @@ describe('Photo cipher', () => {
 
   test('plain images are not mistaken for encrypted files', () => {
     expect(cipher.isEncrypted(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]))).toBe(false);
-  });
-
-  test('the browser module decrypts what the server encrypted', async () => {
-    const sealed = cipher.encrypt(plain, keys.currentKey());
-    const data = sealed.buffer.slice(sealed.byteOffset, sealed.byteOffset + sealed.length);
-    const out = await browserCipher.decrypt(data, id => keys.getKey(id));
-    expect(Buffer.from(out).equals(plain)).toBe(true);
-    expect(browserCipher.supported()).toBe(true);
   });
 
   test('keys from the environment', () => {
@@ -131,7 +122,7 @@ describe('Encrypted storage in the app', () => {
 
   test('paths outside uploads are refused', async () => {
     await agent.get('/uploads/..%2f..%2fserver.js').expect(404);
-    await request(app).get('/uploads/..%2f..%2fserver.js').expect(401);
+    await request(app).get('/uploads/..%2f..%2fserver.js').expect(404);
   });
 
   test('notes are stored encrypted and read back', async () => {

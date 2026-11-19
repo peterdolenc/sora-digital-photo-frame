@@ -1,473 +1,3 @@
-const DEVICE_TOKEN_KEY = 'photoframe_device_token';
-const FAMILY_CODE_KEY = 'photoframe_family_code';
-const RENEW_MS = 6 * 60 * 60 * 1000; // sessions last a day; paired frames sign in again well before
-
-class AuthenticationManager {
-    constructor() {
-        this.isAuthenticated = false;
-        this.authOverlay = document.getElementById('authOverlay');
-        this.pinForm = document.getElementById('pinForm');
-        this.pinInput = document.getElementById('pinInput');
-        this.familyField = document.getElementById('familyField');
-        this.familyInput = document.getElementById('familyCodeInput');
-        this.authSub = document.querySelector('.auth-sub');
-        this.familyCodeRequired = false; // hosted: a PIN also needs the family code
-        this.authButton = document.getElementById('authButton');
-        this.authErrorAlert = document.getElementById('authErrorAlert');
-        this.authErrorMessage = document.getElementById('authErrorMessage');
-        this.authLoading = document.getElementById('authLoading');
-        this.pairCard = document.getElementById('pairCard');
-        this.pairQr = document.getElementById('pairQr');
-        this.pairCode = document.getElementById('pairCode');
-        this.pairHint = document.getElementById('pairHint') || document.querySelector('.pair-code-label');
-        this.pairStatus = document.getElementById('pairStatus');
-        this.pairUrlText = null; // host/pair once a code is shown
-
-        this.init();
-    }
-
-    // "Or open example.com/pair and check the code" is one sentence with the address inside
-    renderPairHint() {
-        if (!this.pairHint) return;
-        const url = document.createElement('span');
-        url.id = 'pairUrl';
-        url.textContent = this.pairUrlText || t('slideshow.static_001');
-        this.pairHint.innerHTML = t('slideshow.pairHint', { url: url.outerHTML });
-    }
-
-    // Re-draws the text this class sets itself, in the current language
-    renderLanguage() {
-        this.renderPairHint();
-        if (this.pairStatusText) this.pairStatus.textContent = t(...this.pairStatusText);
-        if (this.errorText) this.authErrorMessage.textContent = t(...this.errorText);
-    }
-
-    setPairStatus(key, vars) {
-        this.pairStatusText = key ? [key, vars] : null;
-        this.pairStatus.textContent = key ? t(key, vars) : '';
-    }
-
-    init() {
-        this.bindEvents();
-        // Frames with no keyboard can open /slideshow?pin=123456 (hosted: &family=ABCD-EFGH)
-        // and sign in by themselves. A browser that already is a screen uses its token first.
-        const urlPin = new URLSearchParams(location.search).get('pin')?.trim();
-        const deviceToken = localStorage.getItem(DEVICE_TOKEN_KEY);
-        if (deviceToken) {
-            this.signInAsDevice(deviceToken, urlPin);
-        } else if (urlPin) {
-            this.signInFromUrl(urlPin);
-        } else {
-            this.checkExistingSession();
-        }
-    }
-
-    // Keep a frame that is left running signed in to its account
-    keepSignedIn(signIn) {
-        clearInterval(this.renewTimer);
-        this.renewTimer = setInterval(() => signIn().catch(() => {}), RENEW_MS);
-    }
-
-    // A screen (paired by QR code or signed in by PIN) signs in with the token it was given
-    async signInAsDevice(token, fallbackPin) {
-        try {
-            const data = await this.requestDevice(token);
-            if (data.success) {
-                this.useScreenLanguage(data.device?.language);
-                this.handleAuthSuccess(data.account);
-                this.keepSignedIn(() => this.requestDevice(token));
-                return;
-            }
-            if (data.code === 'DEVICE_UNKNOWN') localStorage.removeItem(DEVICE_TOKEN_KEY);
-        } catch (error) {
-            console.error('Signing in as a paired frame failed:', error);
-        }
-        if (fallbackPin) return this.signInFromUrl(fallbackPin);
-        this.checkExistingSession();
-    }
-
-    // A PIN sign-in made this browser a screen: keep its token, as a QR pairing does
-    keepScreen(data) {
-        if (data.token) {
-            localStorage.setItem(DEVICE_TOKEN_KEY, data.token);
-            this.keepSignedIn(() => this.requestDevice(data.token));
-        }
-        const familyCode = this.familyCodeValue().toUpperCase();
-        if (familyCode) localStorage.setItem(FAMILY_CODE_KEY, familyCode);
-        this.useScreenLanguage(data.device?.language);
-    }
-
-    // The family code typed in, from the address, or remembered from last time
-    familyCodeValue() {
-        const typed = this.familyInput?.value.trim();
-        return typed || new URLSearchParams(location.search).get('family')?.trim() || localStorage.getItem(FAMILY_CODE_KEY) || '';
-    }
-
-    // Hosted: show the family code field above the PIN
-    showFamilyField() {
-        this.familyCodeRequired = true;
-        if (!this.familyField) return;
-        this.familyField.classList.remove('hidden');
-        if (!this.familyInput.value) this.familyInput.value = this.familyCodeValue();
-        if (this.authSub) {
-            this.authSub.dataset.i18n = 'slideshow.enter_code_pin';
-            this.authSub.textContent = t('slideshow.enter_code_pin');
-        }
-    }
-
-    async requestDevice(token) {
-        const response = await fetch('/api/auth/device', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token })
-        });
-        return response.json();
-    }
-
-    // Show a QR code an admin can scan to sign this frame in, and wait for them
-    async startPairing() {
-        if (!this.pairCard || this.pairing) return;
-        this.pairing = { starting: true };
-        this.pairCard.classList.remove('is-approved', 'is-error');
-        this.setPairStatus(null);
-        try {
-            const response = await fetch('/api/pair/start', { method: 'POST' });
-            const data = await response.json();
-            if (!this.pairing) return; // signed in meanwhile
-            if (!data.success) throw new Error(data.error || 'Could not get a code');
-
-            this.pairing = { code: data.code, secret: data.secret, expiresAt: data.expiresAt };
-            this.pairQr.innerHTML = data.qr; // an SVG drawn by our server
-            this.pairCode.textContent = `${data.code.slice(0, 3)}-${data.code.slice(3)}`;
-            this.pairUrlText = `${new URL(data.url).host}/pair`;
-            this.renderPairHint();
-            this.pairTimer = setTimeout(() => this.checkPairing(), 2000);
-        } catch (error) {
-            console.error('Pairing could not start:', error);
-            this.pairing = null;
-            this.pairQr.innerHTML = '';
-            this.pairCode.textContent = '······';
-            this.pairCard.classList.add('is-error');
-            this.setPairStatus('slideshow.noCode');
-            this.pairTimer = setTimeout(() => this.startPairing(), 60 * 1000);
-        }
-    }
-
-    async checkPairing() {
-        const pairing = this.pairing;
-        if (!pairing?.code) return;
-        if (Date.now() > pairing.expiresAt) return this.restartPairing();
-
-        let data;
-        try {
-            const query = new URLSearchParams({ code: pairing.code, secret: pairing.secret });
-            data = await (await fetch(`/api/pair/status?${query}`)).json();
-        } catch (error) {
-            data = null; // offline for a moment: keep waiting
-        }
-        if (this.pairing !== pairing) return;
-
-        if (data?.status === 'approved') {
-            localStorage.setItem(DEVICE_TOKEN_KEY, data.token);
-            this.pairCard.classList.add('is-approved');
-            this.useScreenLanguage(data.device?.language);
-            this.setPairStatus('slideshow.paired_as', { name: data.device.name });
-            this.keepSignedIn(() => this.requestDevice(data.token));
-            setTimeout(() => this.handleAuthSuccess(data.account), 700);
-        } else if (data?.status === 'expired') {
-            this.restartPairing();
-        } else {
-            this.pairTimer = setTimeout(() => this.checkPairing(), data ? 2000 : 5000);
-        }
-    }
-
-    useScreenLanguage(language) {
-        if (!language || !window.i18n) return;
-        document.documentElement.dataset.screenLanguage = language;
-        // A URL or an explicit browser preference still wins; otherwise this is the frame's language.
-        if (!new URLSearchParams(location.search).has('lang') && !localStorage.getItem('sora.lang')) {
-            window.i18n.setLanguage(language, false);
-        }
-    }
-
-    restartPairing() {
-        this.stopPairing();
-        this.startPairing();
-    }
-
-    stopPairing() {
-        clearTimeout(this.pairTimer);
-        this.pairing = null;
-    }
-
-    async signInFromUrl(pin) {
-        try {
-            const data = await this.requestPin(pin);
-            if (!data.success) {
-                this.showAuthOverlay();
-                this.handleAuthError(data.error, data.code, data);
-                return;
-            }
-            this.keepScreen(data);
-            this.handleAuthSuccess(data.account);
-        } catch (error) {
-            console.error('Sign-in from the address failed:', error);
-            this.showAuthOverlay();
-            this.showErrorKey('errors.connection');
-        }
-    }
-
-    async requestPin(pin) {
-        const response = await fetch('/api/auth/pin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                pin,
-                // Already a screen? Then this browser stays that screen instead of adding one
-                token: localStorage.getItem(DEVICE_TOKEN_KEY) || undefined,
-                familyCode: this.familyCodeValue() || undefined
-            })
-        });
-        return response.json();
-    }
-
-    bindEvents() {
-        this.pinForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            this.authenticate();
-        });
-
-        this.pinInput.addEventListener('input', () => {
-            this.clearError();
-            this.clearErrorState();
-        });
-
-        // Enter in the family code moves on to the PIN instead of submitting a blank one
-        this.familyInput?.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            this.pinInput.focus();
-        });
-        this.familyInput?.addEventListener('input', () => {
-            this.clearError();
-            this.clearErrorState();
-        });
-
-        this.pinCells = document.querySelectorAll('.pin-cell');
-        this.pinInput.addEventListener('input', () => {
-            this.pinInput.value = this.pinInput.value.replace(/\D/g, '').slice(0, 6);
-            this.renderPinCells();
-        });
-
-        document.querySelectorAll('.keypad [data-key]').forEach(key => {
-            // Keep focus in the PIN field so a hardware keyboard keeps working
-            key.addEventListener('mousedown', (e) => e.preventDefault());
-            key.addEventListener('click', () => this.pressKey(key.dataset.key));
-        });
-
-        this.pinInput.addEventListener('keypress', (e) => {
-            // Allow Enter key to submit form
-            if (e.key === 'Enter') {
-                return;
-            }
-            // Only allow numeric input
-            if (!/[0-9]/.test(e.key) && e.key !== 'Backspace' && e.key !== 'Delete' && e.key !== 'Tab') {
-                e.preventDefault();
-            }
-        });
-    }
-
-    pressKey(key) {
-        if (this.pinInput.disabled) return;
-        const value = this.pinInput.value;
-        if (key === 'back') {
-            this.pinInput.value = value.slice(0, -1);
-        } else if (value.length < 6) {
-            this.pinInput.value = value + key;
-        }
-        this.pinInput.dispatchEvent(new Event('input'));
-    }
-
-    renderPinCells() {
-        const length = this.pinInput.value.length;
-        this.pinCells.forEach((cell, i) => {
-            cell.classList.toggle('filled', i < length);
-            cell.classList.toggle('is-next', i === length);
-        });
-    }
-
-    focusPin() {
-        // Skip on touch screens so the on-screen keyboard doesn't cover the keypad
-        if (matchMedia('(pointer: fine)').matches) this.pinInput.focus();
-    }
-
-    async checkExistingSession() {
-        try {
-            const response = await fetch('/api/auth/session');
-            const data = await response.json();
-
-            if (data.authenticated) {
-                this.handleAuthSuccess(data.account);
-            } else {
-                if (data.pinSignIn === false) this.pinForm.style.display = 'none';
-                else if (data.familyCode) this.showFamilyField();
-                this.showAuthOverlay();
-            }
-        } catch (error) {
-            console.error('Session check failed:', error);
-            this.showAuthOverlay();
-        }
-    }
-
-    async authenticate() {
-        const pin = this.pinInput.value.trim();
-
-        if (!pin) {
-            this.showErrorKey('slideshow.pinRequired');
-            return;
-        }
-
-        if (pin.length < 4) {
-            this.showErrorKey('slideshow.pinTooShort');
-            return;
-        }
-
-        if (this.familyCodeRequired && this.familyCodeValue().replace(/[^a-z0-9]/gi, '').length !== 8) {
-            this.showErrorKey('slideshow.familyCodeRequired');
-            this.familyInput?.focus();
-            return;
-        }
-
-        this.setLoading(true);
-
-        try {
-            const data = await this.requestPin(pin);
-
-            if (data.success) {
-                this.keepScreen(data);
-                this.handleAuthSuccess(data.account);
-            } else {
-                this.handleAuthError(data.error, data.code, data);
-            }
-        } catch (error) {
-            console.error('Authentication error:', error);
-            this.showErrorKey('errors.connection');
-        } finally {
-            this.setLoading(false);
-        }
-    }
-
-    handleAuthSuccess(account) {
-        this.isAuthenticated = true;
-        this.userAccount = account;
-
-        sessionStorage.setItem('authenticated', 'true');
-        sessionStorage.setItem('accountName', account.name);
-
-        this.hideAuthOverlay();
-
-        document.dispatchEvent(new CustomEvent('authenticationComplete', {
-            detail: { account }
-        }));
-    }
-
-    handleAuthError(error, errorCode, data = {}) {
-        // Hosted, a wrong family code and a wrong PIN look the same on purpose
-        if (errorCode === 'INVALID_PIN' && this.familyCodeRequired) this.showErrorKey('slideshow.familyOrPinWrong');
-        else this.showError(i18n.error({ ...data, code: errorCode, message: error }, 'slideshow.invalidPin'));
-
-        if (errorCode === 'RATE_LIMITED') {
-            this.pinInput.disabled = true;
-            this.pinInput.classList.add('border-destructive');
-            this.authButton.disabled = true;
-        } else {
-            this.pinInput.classList.add('border-destructive');
-            this.focusPin();
-            setTimeout(() => {
-                this.pinInput.value = '';
-                this.renderPinCells();
-            }, 450);
-        }
-    }
-
-    async logout() {
-        try {
-            await fetch('/api/auth/session', { method: 'DELETE' });
-        } catch (error) {
-            console.error('Logout error:', error);
-        } finally {
-            this.isAuthenticated = false;
-            this.userAccount = null;
-            clearInterval(this.renewTimer);
-            localStorage.removeItem(DEVICE_TOKEN_KEY); // signing out unpairs this browser
-            sessionStorage.removeItem('authenticated');
-            sessionStorage.removeItem('accountName');
-            this.showAuthOverlay();
-            this.clearForm();
-
-            if (window.slideshow) {
-                window.slideshow.cleanup();
-            }
-        }
-    }
-
-    showAuthOverlay() {
-        this.authOverlay.classList.remove('hidden');
-        setTimeout(() => this.focusPin(), 100);
-        this.startPairing();
-    }
-
-    hideAuthOverlay() {
-        this.authOverlay.classList.add('hidden');
-        this.stopPairing();
-    }
-
-    setLoading(loading) {
-        this.authButton.disabled = loading;
-        this.pinInput.disabled = loading;
-
-        if (loading) {
-            this.authLoading.classList.remove('hidden');
-            this.clearError();
-        } else {
-            this.authLoading.classList.add('hidden');
-        }
-    }
-
-    showError(message) {
-        this.errorText = null;
-        this.authErrorMessage.textContent = message;
-        this.authErrorAlert.classList.remove('hidden');
-    }
-
-    // Same, but kept as a key so it follows a language change
-    showErrorKey(key, vars) {
-        this.showError(t(key, vars));
-        this.errorText = [key, vars];
-    }
-
-    clearError() {
-        this.errorText = null;
-        this.authErrorAlert.classList.add('hidden');
-        this.authErrorMessage.textContent = '';
-    }
-
-    clearErrorState() {
-        this.pinInput.classList.remove('border-destructive');
-        this.pinInput.disabled = false;
-        this.authButton.disabled = false;
-    }
-
-    clearForm() {
-        this.pinInput.value = '';
-        this.renderPinCells();
-        this.clearError();
-        this.clearErrorState();
-        this.pinInput.disabled = false;
-        this.authButton.disabled = false;
-    }
-}
-
 const LAST_SHOWN_KEY = 'photoframe_last_shown';
 
 // "12 March 2019" in the frame's language. Camera times carry no zone and
@@ -481,10 +11,6 @@ function formatTakenAt(takenAt) {
 class PhotoFrameSlideshow {
     constructor() {
         this.currentSlide = 0;
-        // Browser-side decryption (remote encrypted storage only): keys by id, and
-        // each slide's object URL so it can be released when the slide is reused
-        this.frameKeys = new Map();
-        this.objectUrls = [null, null];
         this.isPlaying = true;
         this.interval = Number(document.documentElement.dataset.interval) || 15000; // DEFAULT_SLIDESHOW_INTERVAL
         this.timer = null;
@@ -523,13 +49,13 @@ class PhotoFrameSlideshow {
         this.progressBar = document.getElementById('progressBar');
         this.fullscreenBtn = document.getElementById('fullscreenBtn');
         this.infoBtn = document.getElementById('infoBtn');
-        this.logoutBtn = document.getElementById('logoutBtn');
         this.infoOverlay = document.getElementById('infoOverlay');
         this.ambients = this.slides.map(slide => slide.querySelector('.slide-ambient'));
         this.playPauseBtn = document.getElementById('playPauseBtn');
         this.nextBtn = document.getElementById('nextBtn');
-        this.filename = document.getElementById('filename');
-        this.folder = document.getElementById('folder');
+        this.infoCamera = document.getElementById('infoCamera');
+        this.infoLens = document.getElementById('infoLens');
+        this.infoExposure = document.getElementById('infoExposure');
         this.caption = document.getElementById('photoCaption');
         this.captionPlace = document.getElementById('captionPlace');
         this.captionDate = document.getElementById('captionDate');
@@ -544,12 +70,11 @@ class PhotoFrameSlideshow {
     setupEventListeners() {
         this.fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
         this.infoBtn.addEventListener('click', () => this.toggleInfo());
-        this.logoutBtn.addEventListener('click', () => this.logout());
         this.playPauseBtn.addEventListener('click', () => this.togglePlayPause());
         this.nextBtn.addEventListener('click', () => this.nextImage());
 
         document.addEventListener('keydown', (e) => {
-            // Typing in a field (the family code, say) is not a slideshow shortcut
+            // Typing in a field is not a slideshow shortcut
             if (e.target.closest?.('input, textarea, select')) return;
             switch (e.key) {
                 case ' ': // Space
@@ -652,44 +177,10 @@ class PhotoFrameSlideshow {
         }
     }
 
-    // Key for browser-side decryption, fetched once per key id
-    frameKey(id) {
-        if (!this.frameKeys.has(id)) {
-            const request = fetch(`/api/frame/keys?ids=${encodeURIComponent(id)}`, { credentials: 'same-origin' })
-                .then(response => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-                .then(({ keys }) => {
-                    if (!keys || !keys[id]) throw new Error('Key not available');
-                    return Uint8Array.from(atob(keys[id]), c => c.charCodeAt(0));
-                })
-                .catch((error) => {
-                    this.frameKeys.delete(id); // try again with a later photo
-                    throw error;
-                });
-            this.frameKeys.set(id, request);
-        }
-        return this.frameKeys.get(id);
-    }
-
-    // What to put in the <img>: a decrypted object URL when the photo comes
-    // encrypted from remote storage and this browser can decrypt, else the
-    // server URL (local installs always use the server URL)
-    async imageSource(imageData) {
-        const cipher = window.SoraPhotoCipher;
-        if (imageData.rawUrl && cipher && cipher.supported()) {
-            try {
-                return await cipher.loadImage(imageData.rawUrl, id => this.frameKey(id), imageData.mimeType);
-            } catch (error) {
-                console.warn('Decrypting in the browser failed, using the server copy:', error.message);
-            }
-        }
-        return imageData.url;
-    }
-
     async loadImage(imageData) {
         if (!imageData) return false;
 
-        const src = await this.imageSource(imageData);
-        const isObjectUrl = src.startsWith('blob:');
+        const src = imageData.url;
 
         return new Promise((resolve) => {
             const nextSlide = (this.currentSlide + 1) % 2;
@@ -700,9 +191,6 @@ class PhotoFrameSlideshow {
                 img.removeEventListener('error', onError);
                 this.hideError();
                 this.ambients[nextSlide].style.backgroundImage = `url(${JSON.stringify(src)})`;
-                // The slide's previous photo is gone from screen; free its decrypted copy
-                if (this.objectUrls[nextSlide]) URL.revokeObjectURL(this.objectUrls[nextSlide]);
-                this.objectUrls[nextSlide] = isObjectUrl ? src : null;
                 this.currentImageData = imageData;
                 resolve(true);
             };
@@ -710,7 +198,6 @@ class PhotoFrameSlideshow {
             const onError = (event) => {
                 img.removeEventListener('load', onLoad);
                 img.removeEventListener('error', onError);
-                if (isObjectUrl) URL.revokeObjectURL(src);
                 console.error('Failed to load image:', imageData.url);
                 if (this.errorState.classList.contains('hidden')) {
                     this.showErrorKey('slideshow.loadImageFailedDetail', { detail: imageData.filename });
@@ -753,14 +240,16 @@ class PhotoFrameSlideshow {
     updateInfo() {
         this.updateCaption();
         if (this.currentImageData) {
-            this.filename.textContent = this.currentImageData.filename;
-            this.folder.textContent = this.currentImageData.folder || t('common.library');
+            const info = this.currentImageData.type === 'image' ? this.currentImageData.info : null;
+            this.infoCamera.textContent = info?.camera || '';
+            this.infoLens.textContent = info?.lens || '';
+            this.infoExposure.textContent = [info?.aperture ? `f/${info.aperture}` : '', info?.iso ? `ISO ${info.iso}` : ''].filter(Boolean).join(' · ');
 
-            // Auto-hide info after 3 seconds if visible
-            if (!this.infoOverlay.classList.contains('hidden')) {
+            // Auto-hide info after 15 seconds if visible
+            if (!this.infoOverlay.classList.contains('hidden') && !this.infoTimer) {
                 setTimeout(() => {
                     this.infoOverlay.classList.add('hidden');
-                }, 3000);
+                }, 15000);
             }
         }
     }
@@ -943,6 +432,58 @@ class PhotoFrameSlideshow {
         }
     }
 
+    // The server asked for the info overlay: show it for a while, whatever photos come
+    showInfoFor(seconds) {
+        clearTimeout(this.infoTimer);
+        this.infoOverlay.classList.remove('hidden');
+        this.infoTimer = setTimeout(() => {
+            this.infoTimer = null;
+            this.infoOverlay.classList.add('hidden');
+        }, seconds * 1000);
+    }
+
+    // Starts the slideshow and then follows the server's commands
+    async start() {
+        this.hideError();
+        this.initializeFolderSelector();
+        try {
+            // Folders load first, so the slideshow starts on a folder that exists
+            await this.folderSelector.refresh();
+            await this.startSlideshow();
+        } catch (error) {
+            console.error('Failed to initialize slideshow:', error);
+            this.showErrorKey('slideshow.loadFoldersFailed');
+        }
+        this.listenToServer();
+    }
+
+    // The server controls the frame through an event stream (see services/frameService)
+    // The browser reconnects by itself; on every connection the server tells the current account.
+    listenToServer() {
+        const events = new EventSource('/api/frame/events');
+        const parse = event => {
+            try {
+                return JSON.parse(event.data);
+            } catch {
+                return {};
+            }
+        };
+        events.addEventListener('next', () => this.nextImage());
+        events.addEventListener('info', event => this.showInfoFor(Number(parse(event).seconds) || 5));
+        const account = event => this.onAccountState(parse(event));
+        events.addEventListener('state', account);
+        events.addEventListener('account', account);
+    }
+
+    // A different account shows different folders: start over with what it may see
+    async onAccountState({ accountId }) {
+        const changed = this.accountId !== undefined && this.accountId !== accountId;
+        this.accountId = accountId;
+        if (!changed) return;
+        await this.folderSelector.refresh(); // falls back to all folders if the chosen one is out of reach
+        await this.onFolderChanged(this.folderStorage.getCurrentFolderPath(), '');
+    }
+
     toggleInfo() {
         this.infoOverlay.classList.toggle('hidden');
     }
@@ -972,14 +513,7 @@ class PhotoFrameSlideshow {
     // Re-draws the text this class sets itself, in the current language
     renderLanguage() {
         this.renderPlayPause();
-        if (this.currentImageData) this.folder.textContent = this.currentImageData.folder || t('common.library');
         if (this.errorText && !this.errorState.classList.contains('hidden')) this.errorMessage.textContent = t(...this.errorText);
-    }
-
-    logout() {
-        if (window.authManager) {
-            window.authManager.logout();
-        }
     }
 
     showControlsTemporarily() {
@@ -1129,8 +663,8 @@ class WeatherWidget {
     }
 
     checkAndInit() {
-        // Check if weather widget is enabled (default: true)
-        const enabled = localStorage.getItem('weatherWidgetEnabled') !== 'false';
+        // Check if weather widget is enabled (default: off)
+        const enabled = localStorage.getItem('weatherWidgetEnabled') === 'true';
 
         if (enabled) {
             this.show();
@@ -1148,7 +682,7 @@ class WeatherWidget {
         // Listen for changes in localStorage
         window.addEventListener('storage', (e) => {
             if (e.key === 'weatherWidgetEnabled') {
-                const isEnabled = e.newValue !== 'false';
+                const isEnabled = e.newValue === 'true';
                 if (isEnabled) {
                     this.show();
                     if (!this.updateInterval) this.init();
@@ -1322,35 +856,15 @@ class WeatherWidget {
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    window.authManager = new AuthenticationManager();
     window.slideshow = new PhotoFrameSlideshow();
     window.weatherWidget = new WeatherWidget();
     window.addEventListener('sora:languagechange', () => {
         window.weatherWidget.updateTime();
-        window.authManager.renderLanguage();
         window.slideshow.renderLanguage();
     });
 
-    document.addEventListener('authenticationComplete', async (e) => {
-        console.log('Authentication complete, starting slideshow for:', e.detail.account.name);
-
-        window.slideshow.hideError();
-        window.slideshow.initializeFolderSelector();
-
-        // Wait for folder selector to load folders before starting slideshow
-        if (window.slideshow && window.slideshow.folderSelector) {
-            try {
-                await window.slideshow.folderSelector.refresh();
-                // Start slideshow only after folders are loaded
-                await window.slideshow.startSlideshow();
-            } catch (error) {
-                console.error('Failed to initialize slideshow:', error);
-                window.slideshow.showErrorKey('slideshow.loadFoldersFailed');
-            }
-        } else {
-            window.slideshow.startSlideshow();
-        }
-    });
+    // The server plays one account and starts the frame at once: no sign-in
+    window.slideshow.start();
 
     window.addEventListener('beforeunload', () => {
         window.slideshow.cleanup();

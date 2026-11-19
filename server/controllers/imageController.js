@@ -1,47 +1,31 @@
 const path = require('path');
 const { UPLOADS_DIR } = require('../config/paths');
 const { getLibrary } = require('../library');
-const { currentTenant } = require('../context');
-const { assertCanAdd } = require('../services/quotaService');
 const sharp = require('sharp');
 const thumbnails = require('../services/thumbnailService');
 const { sharpInput } = require('../utils/heic');
 const { displayCopy } = require('../utils/displayCopy');
-const { canSee } = require('../utils/viewerAccess');
+const { canSee, assignedFolders } = require('../utils/viewerAccess');
 const snaps = require('../services/snapService');
 const playOrder = require('../services/playOrderService');
 const photoInfo = require('../services/photoInfoService');
 const { resolveAdminPath, toAdminPath } = require('../utils/safePath');
 const { passClientError } = require('../utils/httpError');
 
+const NO_INFO = { takenAt: null, place: null, caption: null, camera: null, lens: null, aperture: null, iso: null };
+
 class ImageController {
   constructor() {
     this.uploadsDir = UPLOADS_DIR;
     // Track recently shown images to prevent repeats
-    // Per-tenant state (recently shown, image list cache); see the accessors below
-    this.states = new Map();
+    this.recentlyShown = new Set();
+    this.shuffleQueue = { key: null, items: [] }; // the run of photos being played (see pickShuffled)
+    this.imageCache = null;
+    this.cacheTimestamp = null;
     this.maxRecentCount = parseInt(process.env.MAX_RECENT_IMAGES) || 10; // Number of recent images to avoid
     this.shufflePickAmount = Math.max(1, parseInt(process.env.SHUFFLE_PICK_AMOUNT) || 6); // Photos served per random pick
     this.cacheExpiry = parseInt(process.env.IMAGE_CACHE_EXPIRY) || 60000; // Cache for 1 minute
   }
-
-  // Each tenant gets its own anti-repeat history and image list cache
-  state() {
-    const { id } = currentTenant();
-    if (!this.states.has(id)) {
-      this.states.set(id, { recentlyShown: new Set(), imageCache: null, cacheTimestamp: null, shuffleQueue: { key: null, items: [] } });
-    }
-    return this.states.get(id);
-  }
-
-  get recentlyShown() { return this.state().recentlyShown; }
-  set recentlyShown(value) { this.state().recentlyShown = value; }
-  get shuffleQueue() { return this.state().shuffleQueue; }
-  set shuffleQueue(value) { this.state().shuffleQueue = value; }
-  get imageCache() { return this.state().imageCache; }
-  set imageCache(value) { this.state().imageCache = value; }
-  get cacheTimestamp() { return this.state().cacheTimestamp; }
-  set cacheTimestamp(value) { this.state().cacheTimestamp = value; }
 
   // Get all images recursively with caching
   async getAllImages(useCache = true) {
@@ -89,19 +73,14 @@ class ImageController {
       
       let availableImages = allImages;
       
-      // Apply access account folder restrictions if user is PIN authenticated (not admin)
-      if (req.session && req.session.accessAccount && req.session.accessAccount.assignedFolders && req.session.accessAccount.assignedFolders.length > 0 && !req.session.authenticated) {
-        const assignedFolders = req.session.accessAccount.assignedFolders;
-
-        availableImages = allImages.filter(img => {
-          const imgFolder = path.dirname(img.relativePath);
-          // Allowed if the image is in an assigned folder or one of its subfolders
-          return assignedFolders.some(allowedFolder =>
-            imgFolder === allowedFolder || imgFolder.startsWith(allowedFolder + path.sep));
-        });
+      // Apply the folder restrictions of the account being played (not for the admin)
+      const assigned = assignedFolders(req);
+      if (assigned) {
+        // Allowed if the image is in an assigned folder or one of its subfolders
+        availableImages = allImages.filter(img => canSee(req, img.relativePath));
 
         if (availableImages.length === 0) {
-          console.log('❌ Access Control - No accessible images found for assigned folders:', assignedFolders);
+          console.log('❌ Access Control - No accessible images found for assigned folders:', assigned);
           return res.status(403).json({ 
             success: false,
             error: 'No images accessible with your account permissions',
@@ -155,12 +134,8 @@ class ImageController {
       }
 
       const relativePath = getLibrary().photoUrl(toAdminPath(randomImage.path));
-      // When and where a photo was taken is private: only signed-in viewers get it
-      const signedIn = req.session && (req.session.authenticated || req.session.accessAccount);
-      const info = signedIn ? await this.describe(randomImage) : { takenAt: null, place: null, caption: null };
+      const info = await this.describe(randomImage);
       const fullUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
-      // Remote encrypted storage: the frame may fetch the stored bytes and decrypt them itself
-      const rawUrl = getLibrary().rawUrl?.(toAdminPath(randomImage.path)) || null;
       
       res.json({
         success: true,
@@ -171,7 +146,6 @@ class ImageController {
           path: relativePath,
           folder: path.dirname(randomImage.relativePath),
           url: fullUrl,
-          ...(rawUrl && { rawUrl, mimeType: `image/${this.formatFor(randomImage.path)}` }),
           thumbnail: `${req.protocol}://${req.get('host')}/api/images/${encodeURIComponent(randomImage.id)}/thumbnail`,
           order,
           info,
@@ -231,10 +205,10 @@ class ImageController {
   // When and where the photo was taken, for the frame's caption
   async describe(image) {
     try {
-      const { takenAt, lat, lon, caption } = await photoInfo.get(image.path, image.relativePath);
-      return { takenAt, place: await photoInfo.placeName(lat, lon), caption: caption || null };
+      const { takenAt, lat, lon, caption, camera, lens, aperture, iso } = await photoInfo.get(image.path, image.relativePath);
+      return { takenAt, place: await photoInfo.placeName(lat, lon), caption: caption || null, camera: camera ?? null, lens: lens ?? null, aperture: aperture ?? null, iso: iso ?? null };
     } catch {
-      return { takenAt: null, place: null, caption: null };
+      return { ...NO_INFO };
     }
   }
 
@@ -299,7 +273,6 @@ class ImageController {
         const filename = `${file.fieldname}-${uniqueSuffix}.webp`;
         // A display copy sized for frames: upright, WebP, no metadata (GPS stays private)
         const buffer = await displayCopy(file.buffer, { animated: file.mimetype === 'image/gif' });
-        await assertCanAdd(buffer.length);
         const added = await getLibrary().addPhoto(toAdminPath(targetDir), {
           buffer, originalName: filename, contentType: 'image/webp'
         });
@@ -318,11 +291,6 @@ class ImageController {
         files: processedFiles
       });
     } catch (error) {
-      if (error.code === 'QUOTA_EXCEEDED') {
-        // Photos before the one that hit the limit are kept
-        this.clearImageCache();
-        return res.status(413).json({ message: error.message, code: error.code, files: processedFiles });
-      }
       if (passClientError(res, error)) return;
       console.error('Error uploading images:', error);
       res.status(500).json({ message: 'Server error' });

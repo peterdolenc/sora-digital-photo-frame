@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The server and the screen are one device on a trusted network: `/slideshow` starts at once with no sign-in. The server plays one account (a named set of folders) at a time, remembers the last one across restarts and uses the first account on a fresh install. Photos, thumbnails, folders and notes are open to anyone who can reach the server, so run it on a local network only; `/admin` still needs the admin password. `PUBLIC_PHOTOS` no longer does anything.
+- Accounts have a name and folders only; stored PINs are ignored and dropped the next time the account is saved.
+- Shuffle plays a run of `SHUFFLE_PICK_AMOUNT` photos (default 6) in date order, oldest first, from a random spot, then picks another spot. It never starts a run on one of the last `MAX_RECENT_IMAGES` photos shown.
+- The caption under a photo shows its date, place, its own caption (EXIF description or XMP title) and a cleaned-up file name; the info overlay shows camera, lens, aperture and ISO.
+
+### Added
+- Control the frame from other services such as Home Assistant: `GET /api/control/next`, `/api/control/info/<seconds>`, `/api/control/account/<name or id>` and `/api/control/state`. The open slideshow listens to `/api/frame/events` (server-sent events). See the README.
+
+### Removed
+- PIN sign-in, QR and PIN pairing of frames, device tokens, family codes, `MAX_SCREENS`, `PUBLIC_PHOTOS`, the `/pair` page and the Lock button.
+- The hosted-service hooks of `createApp()` (tenants, auth provider, quota, events, session store, library and data store injection; HOOKS.md) and browser-side decryption of remote encrypted storage (`/api/frame/keys`).
+
 ### Added
 - Uploads from a phone: camera photos are shrunk in the browser to the 2560px the server stores, so they travel far smaller; when and where a photo was taken is read first and sent along. Photos go one per request with real progress, are tried again when the connection drops, and the screen stays on while they upload. Formats the browser can't read (HEIC on Android) are sent as before.
 - The library can be added to a phone's home screen (offered after an upload), and on Android it then appears in the gallery's Share menu, so photos can be sent to it from there.

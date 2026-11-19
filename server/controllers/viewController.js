@@ -18,11 +18,6 @@ class ViewController {
   }
 
   // Serve the snap editor
-  // Approving a frame that showed a QR code
-  servePair(req, res) {
-    res.sendFile(path.join(__dirname, '..', 'public', 'pair.html'));
-  }
-
   serveSnap(req, res) {
     res.sendFile(path.join(__dirname, '..', 'public', 'snap.html'));
   }
