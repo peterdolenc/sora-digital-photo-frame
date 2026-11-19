@@ -436,10 +436,31 @@ body.chrome-visible .controls,
 
 /* ---------- Photo caption: where and when ---------------------- */
 
+.caption-caption {
+    position: absolute;
+    bottom: 1.75rem;
+    left: 0;
+    z-index: 3;
+    width: 100%;
+    text-align: center;
+    color: #f4efe6;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+    /* opacity: 0; */
+    /* transform: translateY(6px); */
+    /* transition: opacity 0.6s ease, transform 0.8s var(--ease-out); */
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-style: italic;
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+}
+
 .photo-caption {
     position: absolute;
-    right: clamp(1.5rem, 4vw, 3.5rem);
-    bottom: clamp(1.75rem, 5vh, 3.5rem);
+    right: 1.5rem;
+    top: 1.75rem;
     z-index: 3;
     max-width: min(26rem, 38vw);
     text-align: right;
@@ -465,7 +486,7 @@ body.chrome-visible .controls,
     letter-spacing: -0.01em;
 }
 
-.caption-place, .caption-caption, .caption-file {
+.caption-place, .caption-file {
     margin-top: 6px;
     font-size: 0.6875rem;
     font-weight: 700;

@@ -6,8 +6,6 @@ const { getLibrary } = require('../library');
 const { getDataStore } = require('../store');
 const { currentTenant } = require('../context');
 
-const EXIF_FIELDS = ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef'];
-
 // Nominatim asks for at most one request a second and a real user agent
 const PLACE_URL = 'https://nominatim.openstreetmap.org/reverse';
 const PLACE_GAP_MS = 1100;
@@ -67,7 +65,8 @@ class PhotoInfoService {
     const modifiedAt = stat.mtime.toISOString();
 
     const cached = this.info[relativePath];
-    if (cached && cached.key === key) return { ...cached, modifiedAt };
+    // Entries saved before captions were read have no "caption" field: read them again
+    if (cached && cached.key === key && cached.caption !== undefined) return { ...cached, modifiedAt };
 
     const read = /\.snap\.json$/i.test(fullPath) ? await this.readSnap(fullPath) : await this.readExif(fullPath);
     this.info[relativePath] = { key, ...read };
@@ -105,7 +104,7 @@ class PhotoInfoService {
       takenAt: read.takenAt || told.takenAt,
       lat: read.lat ?? told.lat,
       lon: read.lon ?? told.lon,
-      caption: read.caption ?? told.caption
+      caption: read.caption ?? told.caption ?? null
     };
     this.scheduleSave();
   }
@@ -115,7 +114,7 @@ class PhotoInfoService {
     const takenAt = typeof sent?.takenAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(sent.takenAt) ? sent.takenAt : null;
     const hasGps = Number.isFinite(sent?.lat) && Number.isFinite(sent?.lon)
       && Math.abs(sent.lat) <= 90 && Math.abs(sent.lon) <= 180 && !(sent.lat === 0 && sent.lon === 0);
-    return { takenAt, lat: hasGps ? sent.lat : null, lon: hasGps ? sent.lon : null };
+    return { takenAt, lat: hasGps ? sent.lat : null, lon: hasGps ? sent.lon : null, caption: typeof sent?.caption === 'string' ? sent.caption : null };
   }
 
   // Carry the original upload's capture data when a photo moves (its WebP copy has no EXIF).
@@ -137,7 +136,8 @@ class PhotoInfoService {
 
   async readExifBuffer(buffer) {
     try {
-      const exif = await exifr.parse(buffer, { pick: EXIF_FIELDS });
+      // No "pick": a top-level pick would drop the XMP segment (where the title lives)
+      const exif = await exifr.parse(buffer, { xmp: true });
       const taken = exif?.DateTimeOriginal || exif?.CreateDate;
       const hasGps = Number.isFinite(exif?.latitude) && Number.isFinite(exif?.longitude)
         && !(exif.latitude === 0 && exif.longitude === 0);
@@ -145,17 +145,41 @@ class PhotoInfoService {
         takenAt: taken instanceof Date && !isNaN(taken) ? this.localStamp(taken) : null,
         lat: hasGps ? exif.latitude : null,
         lon: hasGps ? exif.longitude : null,
-        caption: exif.description ?? exif.title ?? null
+        caption: this.captionOf(exif) ?? this.xmpTitle(buffer)
       };
     } catch {
       return { takenAt: null, lat: null, lon: null, caption: null };
     }
   }
 
+  // IFD0 ImageDescription, else the XMP dc:title (a plain string, a { lang, value } pair, or a list of them)
+  captionOf(exif) {
+    const text = value => {
+      const found = Array.isArray(value) ? value.map(text).find(Boolean) : value?.value ?? value;
+      return typeof found === 'string' && found.trim() ? found.trim() : null;
+    };
+    return text(exif?.ImageDescription) ?? text(exif?.title) ?? null;
+  }
+
+  // exifr finds no XMP in some AVIF/HEIC files, so read dc:title from the packet itself
+  xmpTitle(buffer) {
+    const start = buffer?.indexOf('<x:xmpmeta');
+    const end = start >= 0 ? buffer.indexOf('</x:xmpmeta>', start) : -1;
+    if (end < 0) return null;
+    const xmp = buffer.toString('utf8', start, end);
+    const title = xmp.match(/<dc:title>[\s\S]*?<rdf:li[^>]*>([\s\S]*?)<\/rdf:li>/)?.[1]
+      ?? xmp.match(/\sdc:title="([^"]*)"/)?.[1];
+    const text = title?.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e) => {
+      if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[e.toLowerCase()];
+    }).trim();
+    return text || null;
+  }
+
   async readSnap(fullPath) {
     const snap = await getLibrary().readItem(toAdminPath(fullPath))
       .then(buffer => JSON.parse(buffer.toString('utf8'))).catch(() => ({}));
-    return { takenAt: snap.createdAt || null, lat: null, lon: null };
+    return { takenAt: snap.createdAt || null, lat: null, lon: null, caption: null };
   }
 
   // Cameras store wall-clock time with no zone; keep it that way ("2019-03-12T18:04:00")

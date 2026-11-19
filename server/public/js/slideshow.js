@@ -765,6 +765,16 @@ class PhotoFrameSlideshow {
         }
     }
 
+    // "IMG_20240315_family-trip.JPG" -> "IMG family trip"
+    convertToFriendlyFileName(filename) {
+        return filename
+            .replace(/\.[^.]*$/, '')
+            .replace(/\d{1,}/g, '')
+            .replace(/[_-]/g, ' ')
+            .replace(/ {2,}/g, ' ')
+            .trim();
+    }
+
     // Where and when the photo was taken, under the photo (Settings can hide it)
     updateCaption() {
         if (!this.caption) return;
@@ -773,7 +783,7 @@ class PhotoFrameSlideshow {
         const date = formatTakenAt(info?.takenAt);
         const place = info?.place || '';
         const caption = info?.caption || '';
-        const filename = data?.filename|| '';
+        const filename = this.convertToFriendlyFileName(data?.filename || '');
         const enabled = localStorage.getItem('photoDetailsEnabled') !== 'false';
 
         this.caption.classList.remove('is-visible');
